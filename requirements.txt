@@ -2,3 +2,5 @@ streamlit
 pandas
 openpyxl
 requests
+google-api-python-client
+google-auth
