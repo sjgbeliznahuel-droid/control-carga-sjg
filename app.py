@@ -33,7 +33,6 @@ DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
 @st.cache_resource
 def conectar_drive():
     credenciales_dict = json.loads(st.secrets["credenciales"])
-    # Permiso de edición habilitado
     creds = service_account.Credentials.from_service_account_info(
         credenciales_dict, scopes=['https://www.googleapis.com/auth/drive']
     )
@@ -220,9 +219,13 @@ with t_reporte:
         col_btn1, col_btn2 = st.columns([1, 1])
         with col_btn1:
             if st.button("🚀 Ejecutar Cruce Estricto por Fecha", type="primary"):
+                # MODIFICACIÓN CLAVE: El botón azul ahora también limpia la memoria automáticamente
+                obtener_excel_nube.clear()
+                obtener_archivos_drive.clear()
                 st.session_state["mostrar_reporte"] = True
+                if hasattr(st, "rerun"): st.rerun()
+                else: st.experimental_rerun()
         with col_btn2:
-            # MODIFICACIÓN CLAVE: El botón ahora limpia todas las cachés
             if st.button("🔄 Sincronizar Todo (Drive y Sheets)"):
                 obtener_excel_nube.clear()
                 obtener_archivos_drive.clear()
@@ -394,7 +397,6 @@ with t_reporte:
 
                                     st.success("¡Archivo actualizado en Google Drive con éxito!")
                                     
-                                    # MODIFICACIÓN CLAVE: Damos tiempo a Drive a procesar y forzamos limpieza de memoria
                                     time.sleep(2.5) 
                                     obtener_archivos_drive.clear() 
                                     
