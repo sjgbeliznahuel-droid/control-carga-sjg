@@ -2,6 +2,7 @@ import datetime
 import io
 import os
 import re
+import time
 import unicodedata
 import json
 import pandas as pd
@@ -32,6 +33,7 @@ DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
 @st.cache_resource
 def conectar_drive():
     credenciales_dict = json.loads(st.secrets["credenciales"])
+    # Permiso de edición habilitado
     creds = service_account.Credentials.from_service_account_info(
         credenciales_dict, scopes=['https://www.googleapis.com/auth/drive']
     )
@@ -147,39 +149,8 @@ t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena = st.tabs([
 
 with t_rrhh:
     st.header("Carga Diaria de Fichadas (Portería / RRHH)")
-    st.info("ℹ️ Sube el reporte exportado del reloj para guardarlo directamente en Google Drive.")
-    archivo_nuevo = st.file_uploader("Subir Archivo de Fichada Diaria", type=["xlsx", "xltx"], key="uploader_rrhh")
-
-    if archivo_nuevo:
-        if st.button("☁️ Subir y Guardar en Google Drive", type="primary"):
-            try:
-                bytes_data = archivo_nuevo.getvalue()
-                dff_temp = pd.read_excel(io.BytesIO(bytes_data), sheet_name="Hoja2", header=None)
-                d, m = extraer_fecha_contenido(dff_temp)
-                if d and m: nombre_final = f"Fichada_{d:02d}-{m:02d}.xlsx"
-                else:
-                    hoy = datetime.datetime.now()
-                    nombre_final = f"Fichada_{hoy.day:02d}-{hoy.month:02d}.xlsx"
-
-                metadata_archivo = {'name': nombre_final, 'parents': [DRIVE_FOLDER_ID]}
-                media = MediaIoBaseUpload(io.BytesIO(bytes_data), mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', resumable=True)
-                
-                with st.spinner("Subiendo archivo a la nube..."):
-                    drive_service.files().create(body=metadata_archivo, media_body=media, fields='id').execute()
-                    obtener_archivos_drive.clear() # Limpiar caché para que aparezca al instante
-
-                logo_pequeno = SJG_LOGO_SVG.replace('height="75"', 'height="40"').replace("max-width: 380px;", "max-width: 150px;")
-                mensaje_exito = f"""
-                <div style="display: flex; align-items: center; gap: 20px; background-color: #E2EFDA; padding: 15px 25px; border-radius: 8px; border-left: 6px solid #28a745; margin-top: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
-                    <div style="flex-shrink: 0;">{logo_pequeno}</div>
-                    <div>
-                        <h4 style="margin: 0; color: #155724; font-size: 1.15rem;">✅ ¡Guardado en la nube con éxito!</h4>
-                        <p style="margin: 5px 0 0 0; color: #1e5c2b; font-size: 0.95rem;">El archivo <b>{nombre_final}</b> ya está en Google Drive.</p>
-                    </div>
-                </div>"""
-                st.markdown(mensaje_exito, unsafe_allow_html=True)
-            except Exception as e:
-                st.error(f"Error al subir a Drive: {e}")
+    st.info("ℹ️ Para cargar una nueva fichada, arrastrá el Excel exportado directamente a tu carpeta 'FICHADAS' en Google Drive.")
+    st.success("La aplicación detectará automáticamente los nuevos archivos cuando los subas a Drive.")
 
 with t_carga:
     c1, c2 = st.columns(2)
@@ -251,8 +222,10 @@ with t_reporte:
             if st.button("🚀 Ejecutar Cruce Estricto por Fecha", type="primary"):
                 st.session_state["mostrar_reporte"] = True
         with col_btn2:
-            if st.button("🔄 Sincronizar Cambios de Google Sheets"):
+            # MODIFICACIÓN CLAVE: El botón ahora limpia todas las cachés
+            if st.button("🔄 Sincronizar Todo (Drive y Sheets)"):
                 obtener_excel_nube.clear()
+                obtener_archivos_drive.clear()
                 st.session_state["mostrar_reporte"] = True
                 if hasattr(st, "rerun"): st.rerun()
                 else: st.experimental_rerun()
@@ -265,7 +238,7 @@ with t_reporte:
 
                 d_pestana, m_pestana = obtener_dia_mes(nh)
                 dff_raw = pd.read_excel(fh_fichada, sheet_name="Hoja2", header=None)
-                fh_fichada.seek(0) # Reiniciar lectura
+                fh_fichada.seek(0) 
                 
                 d_fichada, m_fichada = obtener_dia_mes(af_selected)
                 if d_fichada is None: d_fichada, m_fichada = extraer_fecha_contenido(dff_raw)
@@ -294,7 +267,6 @@ with t_reporte:
                 if obra_col is None: obra_col = dfc.columns[12] if len(dfc.columns) > 12 else dfc.columns[-1]
 
                 dff = pd.read_excel(fh_fichada, sheet_name="Hoja2")
-                fh_fichada.seek(0) # Reiniciar por si se necesita guardar
 
                 keywords_novedades = {
                     "COMPENSATORIO": "Compensatorio", "COMPENSATORIA": "Compensatorio",
@@ -382,7 +354,7 @@ with t_reporte:
                 with v2:
                     st.subheader("Personal que Fichó en Planta pero NO fue Cargado")
                     if not df_no_cargados.empty:
-                        st.warning(f"⚠️ Se detectaron **{len(df_no_cargados)} personas** que ingresaron a trabajar y **NO figuran cargadas**. Podes cargarles la novedad manualmente aquí abajo:")
+                        st.warning(f"⚠️ Se detectaron **{len(df_no_cargados)} personas** que ingresaron a trabajar y **NO figuran cargadas**.")
                         df_edit = df_no_cargados.copy()
                         df_edit["Asignar Novedad"] = "Seleccionar..."
                         edited_df = st.data_editor(df_edit, column_config={"Asignar Novedad": st.column_config.SelectboxColumn("📝 Asignar Novedad Manual", width="medium", options=["Seleccionar...", "COMPENSATORIO", "ENFERMO", "VACACIONES", "AUSENTE", "SUSPENDIDO", "SUR", "LICENCIA"])}, disabled=["LEGAJO", "Nombre y Apellido (Fichada)", "OBRA (Columna M)", "Estado"], use_container_width=True, key="editor_novedades_faltantes")
@@ -421,6 +393,11 @@ with t_reporte:
                                         drive_service.files().update(fileId=af_selected_id, media_body=media_update).execute()
 
                                     st.success("¡Archivo actualizado en Google Drive con éxito!")
+                                    
+                                    # MODIFICACIÓN CLAVE: Damos tiempo a Drive a procesar y forzamos limpieza de memoria
+                                    time.sleep(2.5) 
+                                    obtener_archivos_drive.clear() 
+                                    
                                     if hasattr(st, "rerun"): st.rerun()
                                     else: st.experimental_rerun()
                                 except Exception as e:
