@@ -498,6 +498,7 @@ with t_cierre:
                 ot_col = next((c for c in dfc_ot.columns if "OT" in str(c).upper()), None)
                 sol_col = next((c for c in dfc_ot.columns if "SOLICITUD" in str(c).upper()), None)
                 fecha_col = next((c for c in dfc_ot.columns if "FECHA" in str(c).upper()), None)
+                notif_col = next((c for c in dfc_ot.columns if "NOTIFICA" in str(c).upper()), None)
                 sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA", "ÁREA"])), None)
                 resp_col = next((c for c in dfc_ot.columns if "RESPONSABLE" in str(c).upper()), None)
 
@@ -510,13 +511,12 @@ with t_cierre:
 
                         sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
                         
-                        # Extraer fecha o usar la fecha de la pestaña
                         if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan":
                             fecha_val = str(row_r[fecha_col]).strip()
                         else:
                             fecha_val = s_name
 
-                        # Extraer sector
+                        notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
                         sector_val = str(row_r[sector_col]).strip() if sector_col and pd.notna(row_r[sector_col]) and str(row_r[sector_col]).lower() != "nan" else ""
                         resp_val = str(row_r[resp_col]).strip() if resp_col and pd.notna(row_r[resp_col]) and str(row_r[resp_col]).lower() != "nan" else ""
 
@@ -525,6 +525,7 @@ with t_cierre:
                                 "OT Programada": ot_str, 
                                 "N° Solicitud": sol_val, 
                                 "Fecha": fecha_val,
+                                "Fecha notificación final": notif_val,
                                 "Sector / Obra": sector_val,
                                 "Responsable del Trabajo": resp_val, 
                                 "Días Presente": [f"Día {d:02d}"], 
@@ -535,6 +536,7 @@ with t_cierre:
                             if f"Día {d:02d}" not in ots_dict[ot_str]["Días Presente"]: ots_dict[ot_str]["Días Presente"].append(f"Día {d:02d}")
                             if not ots_dict[ot_str]["N° Solicitud"] and sol_val: ots_dict[ot_str]["N° Solicitud"] = sol_val
                             if not ots_dict[ot_str]["Fecha"] and fecha_val: ots_dict[ot_str]["Fecha"] = fecha_val
+                            if not ots_dict[ot_str]["Fecha notificación final"] and notif_val: ots_dict[ot_str]["Fecha notificación final"] = notif_val
                             if not ots_dict[ot_str]["Sector / Obra"] and sector_val: ots_dict[ot_str]["Sector / Obra"] = sector_val
                             if not ots_dict[ot_str]["Responsable del Trabajo"] and resp_val: ots_dict[ot_str]["Responsable del Trabajo"] = resp_val
 
@@ -547,7 +549,7 @@ with t_cierre:
                 k_c3.metric("⏳ OTs Pendientes", len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() == ""]))
                 
                 st.divider()
-                st.write("📝 **Completá o modificá los datos de Solicitud, Fecha, Sector y Responsable directamente en la tabla:**")
+                st.write("📝 **Completá o modificá los datos de Solicitud, Fecha, Notificación Final, Sector y Responsable directamente en la tabla:**")
                 
                 edited_ots_df = st.data_editor(
                     df_ots_unicas, 
@@ -555,6 +557,7 @@ with t_cierre:
                         "OT Programada": st.column_config.TextColumn("OT Programada", disabled=True), 
                         "N° Solicitud": st.column_config.TextColumn("N° Solicitud"),
                         "Fecha": st.column_config.TextColumn("Fecha"),
+                        "Fecha notificación final": st.column_config.TextColumn("Fecha notificación final"),
                         "Sector / Obra": st.column_config.TextColumn("Sector / Obra"),
                         "Responsable del Trabajo": st.column_config.TextColumn("Responsable del Trabajo"), 
                         "Días Presente": st.column_config.TextColumn("Días Presente", disabled=True), 
@@ -570,6 +573,7 @@ with t_cierre:
                             str(r["OT Programada"]).strip(): {
                                 "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
                                 "Fecha": str(r["Fecha"]).strip() if pd.notna(r["Fecha"]) and str(r["Fecha"]).lower() != "nan" else "",
+                                "FechaNotificacion": str(r["Fecha notificación final"]).strip() if pd.notna(r["Fecha notificación final"]) and str(r["Fecha notificación final"]).lower() != "nan" else "",
                                 "Sector": str(r["Sector / Obra"]).strip() if pd.notna(r["Sector / Obra"]) and str(r["Sector / Obra"]).lower() != "nan" else "",
                                 "Responsable": str(r["Responsable del Trabajo"]).strip() if pd.notna(r["Responsable del Trabajo"]) and str(r["Responsable del Trabajo"]).lower() != "nan" else ""
                             } for _, r in edited_ots_df.iterrows()
