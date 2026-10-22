@@ -40,7 +40,6 @@ def conectar_drive():
 
 drive_service = conectar_drive()
 
-# SIN CACHÉ: Siempre lee en vivo desde Google Drive
 def obtener_archivos_drive():
     query = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
     resultados = drive_service.files().list(q=query, orderBy="name desc", pageSize=1000, fields="files(id, name)").execute()
@@ -94,7 +93,6 @@ def limpiar_legajo(val):
     try: return int(float(str(val).strip()))
     except (ValueError, TypeError): return None
 
-# SIN CACHÉ: Siempre descarga el Sheets actualizado
 def obtener_excel_nube(url):
     response = requests.get(url)
     response.raise_for_status()
@@ -281,11 +279,23 @@ with t_reporte:
 
                 for i in range(2, len(dff)):
                     lv, nv = dff.iloc[i, 2], dff.iloc[i, 3]
-                    row_text = " ".join([str(val).upper() for val in dff.iloc[i].values if pd.notna(val)])
-                    novedad_detectada = next((label for kw, label in keywords_novedades.items() if kw in row_text), None)
+                    
+                    # 1. Limpiar el nombre de cualquier novedad vieja pegada
+                    nom_str = str(nv).strip() if pd.notna(nv) else ""
+                    for kw in keywords_novedades.keys():
+                        nom_str = re.sub(rf"\s*-\s*{kw}.*", "", nom_str, flags=re.IGNORECASE).strip()
+
+                    # 2. Evaluar novedades de forma aislada
+                    col_m_val = str(dff.iloc[i, 12]).upper() if len(dff.columns) > 12 and pd.notna(dff.iloc[i, 12]) else ""
+                    row_text_sin_nombre = " ".join([str(val).upper() for idx_v, val in enumerate(dff.iloc[i].values) if idx_v != 3 and pd.notna(val)])
+                    
+                    novedad_detectada = None
+                    for kw, label in keywords_novedades.items():
+                        if kw in col_m_val or kw in row_text_sin_nombre:
+                            novedad_detectada = label
+                            break
 
                     clean_lv = limpiar_legajo(lv)
-                    nom_str = str(nv).strip() if pd.notna(nv) else ""
                     val_nombre_norm = normalizar_texto(nom_str)
 
                     info_dict = {
@@ -378,9 +388,8 @@ with t_reporte:
                                                 match_found = (cell_leg == leg_buscar) if (cell_leg is not None and leg_buscar is not None) else (nom_buscar and nom_buscar.lower() in cell_name.lower())
 
                                                 if match_found:
+                                                    # GUARDADO LIMPIO: Solo escribe la novedad en la Columna M (columna 13)
                                                     ws_fichada.cell(row=r_idx, column=13).value = nov_asignar
-                                                    if nov_asignar not in cell_name:
-                                                        ws_fichada.cell(row=r_idx, column=4).value = f"{cell_name} - {nov_asignar}"
                                                     break
 
                                         out_bytes = io.BytesIO()
@@ -391,9 +400,7 @@ with t_reporte:
                                         drive_service.files().update(fileId=af_selected_id, media_body=media_update).execute()
 
                                     st.success("¡Archivo actualizado en Google Drive con éxito!")
-                                    
-                                    time.sleep(2.5) 
-                                    
+                                    time.sleep(2) 
                                     if hasattr(st, "rerun"): st.rerun()
                                     else: st.experimental_rerun()
                                 except Exception as e:
