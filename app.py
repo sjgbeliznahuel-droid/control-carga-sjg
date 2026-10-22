@@ -40,7 +40,7 @@ def conectar_drive():
 
 drive_service = conectar_drive()
 
-@st.cache_data(ttl=15, show_spinner=False)
+# SIN CACHÉ: Siempre lee en vivo desde Google Drive
 def obtener_archivos_drive():
     query = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
     resultados = drive_service.files().list(q=query, orderBy="name desc", pageSize=1000, fields="files(id, name)").execute()
@@ -64,7 +64,7 @@ with col_logo:
     st.markdown(SJG_LOGO_SVG, unsafe_allow_html=True)
 with col_titulo:
     st.title("Sistema de Control y Validación de Personal")
-    st.caption("Conciliación automatizada de Partes de Carga vs. Fichadas en Puerta (Cloud)")
+    st.caption("Conciliación automatizada de Partes de Carga vs. Fichadas en Puerta (Cloud - En Vivo)")
 st.divider()
 
 MESES_NOMBRES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
@@ -94,7 +94,7 @@ def limpiar_legajo(val):
     try: return int(float(str(val).strip()))
     except (ValueError, TypeError): return None
 
-@st.cache_data(show_spinner=False)
+# SIN CACHÉ: Siempre descarga el Sheets actualizado
 def obtener_excel_nube(url):
     response = requests.get(url)
     response.raise_for_status()
@@ -219,16 +219,11 @@ with t_reporte:
         col_btn1, col_btn2 = st.columns([1, 1])
         with col_btn1:
             if st.button("🚀 Ejecutar Cruce Estricto por Fecha", type="primary"):
-                # MODIFICACIÓN CLAVE: El botón azul ahora también limpia la memoria automáticamente
-                obtener_excel_nube.clear()
-                obtener_archivos_drive.clear()
                 st.session_state["mostrar_reporte"] = True
                 if hasattr(st, "rerun"): st.rerun()
                 else: st.experimental_rerun()
         with col_btn2:
             if st.button("🔄 Sincronizar Todo (Drive y Sheets)"):
-                obtener_excel_nube.clear()
-                obtener_archivos_drive.clear()
                 st.session_state["mostrar_reporte"] = True
                 if hasattr(st, "rerun"): st.rerun()
                 else: st.experimental_rerun()
@@ -398,7 +393,6 @@ with t_reporte:
                                     st.success("¡Archivo actualizado en Google Drive con éxito!")
                                     
                                     time.sleep(2.5) 
-                                    obtener_archivos_drive.clear() 
                                     
                                     if hasattr(st, "rerun"): st.rerun()
                                     else: st.experimental_rerun()
@@ -535,7 +529,6 @@ with t_cierre:
                         with st.spinner("Sincronizando con Google Sheets..."):
                             res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
                         if res.status_code == 200:
-                            obtener_excel_nube.clear()
                             st.success("🟢 ¡Sincronizado con éxito!")
                         else: st.error(f"Error {res.status_code}")
                     except Exception as e: st.error(f"Error al enviar datos: {e}")
