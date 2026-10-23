@@ -28,6 +28,7 @@ SHEET_ID = "1gGkGjO-ZX7auYdlKAuI9rLEN_KoVah3vdnz7WofcHq0"
 URL_DESCARGA_SHEET = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxZOKYHQHzLR-gZionm3Ub1z8Rlrz5l6AtR1D8gLKKIeAqhSGMf62vMfsa4F2s1gcweFA/exec"
 DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
+NOTIF_FOLDER_ID = "1GJGTwWRwmrWT-Zgkp4nQcWmm3kk-eR8y"  # Carpeta de Notificaciones Finales
 
 # --- CONEXIÓN A GOOGLE DRIVE ---
 @st.cache_resource
@@ -54,6 +55,41 @@ def descargar_archivo_drive(file_id):
         _, terminado = downloader.next_chunk()
     fh.seek(0)
     return fh
+
+def obtener_notificaciones_drive():
+    """Lee automáticamente el archivo de notificaciones desde la nueva carpeta de Drive"""
+    try:
+        query = f"'{NOTIF_FOLDER_ID}' in parents and trashed=false"
+        resultados = drive_service.files().list(q=query, orderBy="modifiedTime desc", pageSize=10, fields="files(id, name)").execute()
+        archivos = resultados.get('files', [])
+        archivos_validos = [f for f in archivos if f['name'].endswith(('.xlsx', '.xltx', '.csv'))]
+        
+        if not archivos_validos:
+            return {}
+        
+        # Lee el archivo más reciente en la carpeta de notificaciones
+        file_id = archivos_validos[0]['id']
+        fh = descargar_archivo_drive(file_id)
+        df_notif = pd.read_excel(fh)
+        
+        ot_col = next((c for c in df_notif.columns if "OT" in str(c).upper()), None)
+        notif_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["NOTIFICACI", "FECHA NOTIF", "FINAL"])), None)
+        
+        mapa_notif = {}
+        if ot_col and notif_col:
+            for _, row in df_notif.iterrows():
+                if pd.notna(row[ot_col]):
+                    try:
+                        ot_key = str(int(float(str(row[ot_col]).strip())))
+                    except Exception:
+                        ot_key = str(row[ot_col]).strip()
+                    
+                    val_notif = str(row[notif_col]).strip() if pd.notna(row[notif_col]) and str(row[notif_col]).lower() != "nan" else ""
+                    if val_notif:
+                        mapa_notif[ot_key] = val_notif
+        return mapa_notif
+    except Exception:
+        return {}
 
 # --- LOGO VECTORIAL ---
 SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
@@ -487,6 +523,9 @@ with t_cierre:
                 dias_hasta_opciones = [d for d in dias_ordenados if d >= desde_dia_sel]
                 hasta_dia_sel = st.selectbox("📅 Fecha Hasta:", options=dias_hasta_opciones, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map[d]})", index=len(dias_hasta_opciones)-1 if dias_hasta_opciones else 0)
 
+            # Cruce automático con la carpeta de notificaciones finales en Drive
+            mapa_notif_drive = obtener_notificaciones_drive()
+
             ots_dict = {}
             for d in dias_ordenados:
                 if d < desde_dia_sel or d > hasta_dia_sel: continue
@@ -516,7 +555,11 @@ with t_cierre:
                         else:
                             fecha_val = s_name
 
+                        # Prioridad de Notificación: Planilla local -> Archivo Drive
                         notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
+                        if not notif_val and ot_str in mapa_notif_drive:
+                            notif_val = mapa_notif_drive[ot_str]
+
                         sector_val = str(row_r[sector_col]).strip() if sector_col and pd.notna(row_r[sector_col]) and str(row_r[sector_col]).lower() != "nan" else ""
                         resp_val = str(row_r[resp_col]).strip() if resp_col and pd.notna(row_r[resp_col]) and str(row_r[resp_col]).lower() != "nan" else ""
 
