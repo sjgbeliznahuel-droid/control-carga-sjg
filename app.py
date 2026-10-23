@@ -46,6 +46,15 @@ def obtener_archivos_drive():
     resultados = drive_service.files().list(q=query, orderBy="name desc", pageSize=1000, fields="files(id, name)").execute()
     return resultados.get('files', [])
 
+def obtener_archivos_notif_drive():
+    """Lista todos los archivos de la carpeta de notificaciones en Drive"""
+    try:
+        query = f"'{NOTIF_FOLDER_ID}' in parents and trashed=false"
+        resultados = drive_service.files().list(q=query, orderBy="name desc", pageSize=1000, fields="files(id, name)").execute()
+        return [f for f in resultados.get('files', []) if f['name'].endswith(('.xlsx', '.xltx', '.csv'))]
+    except Exception:
+        return []
+
 def descargar_archivo_drive(file_id):
     request = drive_service.files().get_media(fileId=file_id)
     fh = io.BytesIO()
@@ -56,27 +65,20 @@ def descargar_archivo_drive(file_id):
     fh.seek(0)
     return fh
 
-def obtener_notificaciones_drive():
-    """Lee automáticamente el archivo de notificaciones desde la nueva carpeta de Drive"""
+def obtener_notificaciones_drive(file_id):
+    """Lee el archivo de notificaciones seleccionado para cruzar OT -> (Notificación Final, Solicitud)"""
+    if not file_id:
+        return {}
     try:
-        query = f"'{NOTIF_FOLDER_ID}' in parents and trashed=false"
-        resultados = drive_service.files().list(q=query, orderBy="modifiedTime desc", pageSize=10, fields="files(id, name)").execute()
-        archivos = resultados.get('files', [])
-        archivos_validos = [f for f in archivos if f['name'].endswith(('.xlsx', '.xltx', '.csv'))]
-        
-        if not archivos_validos:
-            return {}
-        
-        # Lee el archivo más reciente en la carpeta de notificaciones
-        file_id = archivos_validos[0]['id']
         fh = descargar_archivo_drive(file_id)
         df_notif = pd.read_excel(fh)
         
         ot_col = next((c for c in df_notif.columns if "OT" in str(c).upper()), None)
         notif_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["NOTIFICACI", "FECHA NOTIF", "FINAL"])), None)
+        sol_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["SOLICITUD", "SOLIC"])), None)
         
         mapa_notif = {}
-        if ot_col and notif_col:
+        if ot_col:
             for _, row in df_notif.iterrows():
                 if pd.notna(row[ot_col]):
                     try:
@@ -84,9 +86,13 @@ def obtener_notificaciones_drive():
                     except Exception:
                         ot_key = str(row[ot_col]).strip()
                     
-                    val_notif = str(row[notif_col]).strip() if pd.notna(row[notif_col]) and str(row[notif_col]).lower() != "nan" else ""
-                    if val_notif:
-                        mapa_notif[ot_key] = val_notif
+                    val_notif = str(row[notif_col]).strip() if notif_col and pd.notna(row[notif_col]) and str(row[notif_col]).lower() != "nan" else ""
+                    val_sol = str(row[sol_col]).strip() if sol_col and pd.notna(row[sol_col]) and str(row[sol_col]).lower() != "nan" else ""
+
+                    mapa_notif[ot_key] = {
+                        "notificacion": val_notif,
+                        "solicitud": val_sol
+                    }
         return mapa_notif
     except Exception:
         return {}
@@ -517,14 +523,22 @@ with t_cierre:
         dias_ordenados = sorted(dias_disponibles_map.keys())
 
         if dias_ordenados:
-            col_f1, col_f2 = st.columns(2)
-            with col_f1: desde_dia_sel = st.selectbox("📅 Fecha Desde:", options=dias_ordenados, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map[d]})", index=0)
+            col_f1, col_f2, col_f3 = st.columns([1, 1, 1.2])
+            with col_f1: 
+                desde_dia_sel = st.selectbox("📅 Fecha Desde:", options=dias_ordenados, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map[d]})", index=0)
             with col_f2:
                 dias_hasta_opciones = [d for d in dias_ordenados if d >= desde_dia_sel]
                 hasta_dia_sel = st.selectbox("📅 Fecha Hasta:", options=dias_hasta_opciones, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map[d]})", index=len(dias_hasta_opciones)-1 if dias_hasta_opciones else 0)
 
-            # Cruce automático con la carpeta de notificaciones finales en Drive
-            mapa_notif_drive = obtener_notificaciones_drive()
+            with col_f3:
+                archivos_notif = obtener_archivos_notif_drive()
+                mapa_notif_files = {f['name']: f['id'] for f in archivos_notif}
+                opciones_notif = ["-- Sin planilla de notificaciones --"] + list(mapa_notif_files.keys())
+                notif_sel_name = st.selectbox("📑 Planilla Notificaciones (Drive):", options=opciones_notif)
+                notif_file_id = mapa_notif_files.get(notif_sel_name) if notif_sel_name != "-- Sin planilla de notificaciones --" else None
+
+            # Obtenemos los datos del archivo de notificaciones seleccionado en Drive
+            mapa_notif_drive = obtener_notificaciones_drive(notif_file_id) if notif_file_id else {}
 
             ots_dict = {}
             for d in dias_ordenados:
@@ -555,10 +569,14 @@ with t_cierre:
                         else:
                             fecha_val = s_name
 
-                        # Prioridad de Notificación: Planilla local -> Archivo Drive
                         notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
-                        if not notif_val and ot_str in mapa_notif_drive:
-                            notif_val = mapa_notif_drive[ot_str]
+                        
+                        # Cruce dinámico con la planilla de Drive seleccionada (Notificación y Solicitud)
+                        if ot_str in mapa_notif_drive:
+                            if not notif_val and mapa_notif_drive[ot_str].get("notificacion"):
+                                notif_val = mapa_notif_drive[ot_str]["notificacion"]
+                            if not sol_val and mapa_notif_drive[ot_str].get("solicitud"):
+                                sol_val = mapa_notif_drive[ot_str]["solicitud"]
 
                         sector_val = str(row_r[sector_col]).strip() if sector_col and pd.notna(row_r[sector_col]) and str(row_r[sector_col]).lower() != "nan" else ""
                         resp_val = str(row_r[resp_col]).strip() if resp_col and pd.notna(row_r[resp_col]) and str(row_r[resp_col]).lower() != "nan" else ""
