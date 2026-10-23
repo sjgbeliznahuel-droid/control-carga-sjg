@@ -47,12 +47,29 @@ def obtener_archivos_drive():
     return resultados.get('files', [])
 
 def obtener_archivos_notif_drive():
-    """Lista todos los archivos de la carpeta de notificaciones en Drive"""
+    """Lista todos los archivos (Excel o Google Sheets) de la carpeta de notificaciones en Drive"""
     try:
         query = f"'{NOTIF_FOLDER_ID}' in parents and trashed=false"
-        resultados = drive_service.files().list(q=query, orderBy="name desc", pageSize=1000, fields="files(id, name)").execute()
-        return [f for f in resultados.get('files', []) if f['name'].endswith(('.xlsx', '.xltx', '.csv'))]
-    except Exception:
+        resultados = drive_service.files().list(
+            q=query, 
+            orderBy="modifiedTime desc", 
+            pageSize=1000, 
+            fields="files(id, name, mimeType)"
+        ).execute()
+        
+        archivos = resultados.get('files', [])
+        
+        archivos_validos = []
+        for f in archivos:
+            nombre = f.get('name', '')
+            mime = f.get('mimeType', '')
+            if nombre.lower().endswith(('.xlsx', '.xltx', '.csv')) or mime == 'application/vnd.google-apps.spreadsheet':
+                archivos_validos.append(f)
+                
+        return archivos_validos
+    except Exception as e:
+        st.error(f"⚠️ Error de acceso a la carpeta de Drive: {e}")
+        st.info("💡 Asegurate de haber compartido la carpeta con el mail de tu cuenta de servicio (Service Account).")
         return []
 
 def descargar_archivo_drive(file_id):
@@ -65,12 +82,27 @@ def descargar_archivo_drive(file_id):
     fh.seek(0)
     return fh
 
-def obtener_notificaciones_drive(file_id):
+def descargar_archivo_notif_drive(file_id, mime_type):
+    """Descarga tanto archivos Excel físicos como Hojas de Cálculo nativas de Google"""
+    if mime_type == 'application/vnd.google-apps.spreadsheet':
+        request = drive_service.files().export_media(fileId=file_id, mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    else:
+        request = drive_service.files().get_media(fileId=file_id)
+        
+    fh = io.BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    terminado = False
+    while not terminado:
+        _, terminado = downloader.next_chunk()
+    fh.seek(0)
+    return fh
+
+def obtener_notificaciones_drive(file_id, mime_type=None):
     """Lee el archivo de notificaciones seleccionado para cruzar OT -> (Notificación Final, Solicitud)"""
     if not file_id:
         return {}
     try:
-        fh = descargar_archivo_drive(file_id)
+        fh = descargar_archivo_notif_drive(file_id, mime_type)
         df_notif = pd.read_excel(fh)
         
         ot_col = next((c for c in df_notif.columns if "OT" in str(c).upper()), None)
@@ -94,7 +126,8 @@ def obtener_notificaciones_drive(file_id):
                         "solicitud": val_sol
                     }
         return mapa_notif
-    except Exception:
+    except Exception as e:
+        st.error(f"Error al procesar el archivo de notificaciones: {e}")
         return {}
 
 # --- LOGO VECTORIAL ---
@@ -532,13 +565,20 @@ with t_cierre:
 
             with col_f3:
                 archivos_notif = obtener_archivos_notif_drive()
-                mapa_notif_files = {f['name']: f['id'] for f in archivos_notif}
+                mapa_notif_files = {f['name']: f for f in archivos_notif}
                 opciones_notif = ["-- Sin planilla de notificaciones --"] + list(mapa_notif_files.keys())
                 notif_sel_name = st.selectbox("📑 Planilla Notificaciones (Drive):", options=opciones_notif)
-                notif_file_id = mapa_notif_files.get(notif_sel_name) if notif_sel_name != "-- Sin planilla de notificaciones --" else None
+                
+                if notif_sel_name != "-- Sin planilla de notificaciones --":
+                    selected_file_info = mapa_notif_files.get(notif_sel_name, {})
+                    notif_file_id = selected_file_info.get('id')
+                    notif_mime_type = selected_file_info.get('mimeType')
+                else:
+                    notif_file_id = None
+                    notif_mime_type = None
 
             # Obtenemos los datos del archivo de notificaciones seleccionado en Drive
-            mapa_notif_drive = obtener_notificaciones_drive(notif_file_id) if notif_file_id else {}
+            mapa_notif_drive = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else {}
 
             ots_dict = {}
             for d in dias_ordenados:
