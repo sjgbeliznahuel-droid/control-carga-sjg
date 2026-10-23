@@ -47,12 +47,15 @@ def normalizar_ot(val):
     """Convierte cualquier valor de OT a un string numérico limpio sin decimales ni espacios"""
     if pd.isna(val): return ""
     s = str(val).strip()
-    if not s or s.lower() == "nan": return ""
-    s = re.sub(r'\.0$', '', s)
+    if not s or s.lower() in ["nan", "none", "null"]: return ""
+    s = re.sub(r'\.0+$', '', s)
     try:
-        return str(int(float(s)))
+        val_float = float(s)
+        if val_float.is_integer():
+            return str(int(val_float))
     except Exception:
-        return s
+        pass
+    return s
 
 def obtener_archivos_drive():
     query = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
@@ -110,47 +113,85 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     return fh
 
 def obtener_notificaciones_drive(file_id, mime_type=None):
-    """Lee la planilla de notificaciones seleccionada detectando encabezados y agrupando datos por OT"""
+    """Lee la planilla de notificaciones seleccionada detectando automáticamente columnas por patrón de contenido"""
     if not file_id:
-        return {}
+        return {}, {}
     try:
         fh = descargar_archivo_notif_drive(file_id, mime_type)
-        
-        # Leer sin encabezado para detectar en qué fila están los títulos
         df_raw = pd.read_excel(fh, header=None)
         
+        # Buscar fila de encabezados en las primeras 15 filas
         header_row = 0
-        for idx, row in df_raw.iterrows():
-            row_str = " ".join([str(v).upper() for v in row.values if pd.notna(v)])
-            if any(k in row_str for k in ["OT", "SOLICITUD", "ORDEN", "NOTIFICACI"]):
+        for idx in range(min(15, len(df_raw))):
+            row_vals = [str(v).upper() for v in df_raw.iloc[idx].values if pd.notna(v)]
+            row_str = " ".join(row_vals)
+            if any(k in row_str for k in ["OT", "SOLICITUD", "ORDEN", "NOTIF"]):
                 header_row = idx
                 break
         
-        fh.seek(0)
-        df_notif = pd.read_excel(fh, skiprows=header_row)
+        raw_headers = [str(v).strip() if pd.notna(v) else f"Col_{i}" for i, v in enumerate(df_raw.iloc[header_row].values)]
+        df_notif = df_raw.iloc[header_row + 1:].copy()
+        df_notif.columns = raw_headers
         
-        ot_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["OT", "ORDEN", "O.T."])), None)
-        sol_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["SOLICITUD", "SOLIC", "N° SOL", "NUMERO SOL"])), None)
-        est_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["ESTADO", "STATUS", "ESTADO SOL"])), None)
-        
-        # Columna D (4ta columna, índice 3) para Fecha de Notificación
+        # 1. Identificar columna OT
+        ot_col = None
+        for c in df_notif.columns:
+            c_str = str(c).strip().upper()
+            if c_str in ["OT", "ORDEN", "N° OT", "Nº OT", "N° ORDEN", "ORDEN DE TRABAJO", "OT PROGRAMADA"]:
+                ot_col = c
+                break
+        if not ot_col:
+            for c in df_notif.columns:
+                c_str = str(c).strip().upper()
+                if re.search(r'\b(OT|ORDEN)\b', c_str):
+                    ot_col = c
+                    break
+        if not ot_col:
+            for c in df_notif.columns:
+                sample = [normalizar_ot(v) for v in df_notif[c].dropna().head(20)]
+                if any(len(v) >= 7 and v.isdigit() for v in sample):
+                    ot_col = c
+                    break
+
+        # 2. Identificar columna Solicitud
+        sol_col = None
+        for c in df_notif.columns:
+            c_str = str(c).strip().upper()
+            if any(k in c_str for k in ["SOLICITUD", "SOLIC", "N° SOL", "NUMERO SOL", "NRO SOL"]):
+                sol_col = c
+                break
+
+        # 3. Identificar columna Estado
+        est_col = None
+        for c in df_notif.columns:
+            c_str = str(c).strip().upper()
+            if any(k in c_str for k in ["ESTADO", "STATUS"]):
+                est_col = c
+                break
+
+        # 4. Identificar columna Fecha (Columna D = Índice 3 por defecto)
+        fecha_col = None
         if len(df_notif.columns) > 3:
-            fecha_col_d = df_notif.columns[3]
+            fecha_col = df_notif.columns[3]
         else:
-            fecha_col_d = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["NOTIF", "FECHA"])), None)
+            for c in df_notif.columns:
+                c_str = str(c).strip().upper()
+                if any(k in c_str for k in ["FECHA", "NOTIF"]):
+                    fecha_col = c
+                    break
 
         mapa_notif_acumulado = {}
         if ot_col:
             for _, row in df_notif.iterrows():
                 ot_key = normalizar_ot(row[ot_col])
                 if not ot_key: continue
-                
+
                 val_sol = str(row[sol_col]).strip() if sol_col and pd.notna(row[sol_col]) and str(row[sol_col]).lower() != "nan" else ""
                 val_est = str(row[est_col]).strip() if est_col and pd.notna(row[est_col]) and str(row[est_col]).lower() != "nan" else ""
-                
+
                 val_fecha = ""
-                if fecha_col_d and pd.notna(row[fecha_col_d]) and str(row[fecha_col_d]).lower() != "nan":
-                    v_f = row[fecha_col_d]
+                if fecha_col and pd.notna(row[fecha_col]) and str(row[fecha_col]).lower() != "nan":
+                    v_f = row[fecha_col]
                     if isinstance(v_f, (pd.Timestamp, datetime.date, datetime.datetime)):
                         val_fecha = v_f.strftime("%d/%m/%Y")
                     else:
@@ -167,7 +208,7 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                         "notificaciones": [],
                         "estados": []
                     }
-                
+
                 if val_sol and val_sol not in mapa_notif_acumulado[ot_key]["solicitudes"]:
                     mapa_notif_acumulado[ot_key]["solicitudes"].append(val_sol)
                 if val_fecha and val_fecha not in mapa_notif_acumulado[ot_key]["notificaciones"]:
@@ -175,7 +216,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                 if val_est and val_est not in mapa_notif_acumulado[ot_key]["estados"]:
                     mapa_notif_acumulado[ot_key]["estados"].append(val_est)
 
-        # Formatear agrupando con guiones
         mapa_notif_final = {}
         for k_ot, v_data in mapa_notif_acumulado.items():
             mapa_notif_final[k_ot] = {
@@ -184,10 +224,18 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                 "estado": " - ".join(v_data["estados"])
             }
 
-        return mapa_notif_final
+        diag = {
+            "ot_col": ot_col,
+            "sol_col": sol_col,
+            "est_col": est_col,
+            "fecha_col": fecha_col,
+            "total_keys": len(mapa_notif_final)
+        }
+
+        return mapa_notif_final, diag
     except Exception as e:
         st.error(f"Error al procesar la planilla de notificaciones: {e}")
-        return {}
+        return {}, {}
 
 # --- LOGO VECTORIAL ---
 SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
@@ -647,12 +695,12 @@ with t_cierre:
 
             if st.session_state["cruce_cierre_ejecutado"]:
                 with st.spinner("Procesando OTs y cruzando notificaciones desde Drive..."):
-                    mapa_notif_drive = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else {}
+                    mapa_notif_drive, diag_info = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else ({}, {})
 
                     if mapa_notif_drive:
-                        st.info(f"💡 Se leyeron **{len(mapa_notif_drive)} OTs** registradas en la planilla de Drive seleccionada.")
+                        st.info(f"💡 Se detectaron **{len(mapa_notif_drive)} OTs válidas** en Drive (Columna OT: `{diag_info.get('ot_col')}`, Solicitud: `{diag_info.get('sol_col')}`, Fecha Col. D: `{diag_info.get('fecha_col')}`).")
                     elif notif_file_id:
-                        st.warning("⚠️ No se encontraron OTs asociadas en la planilla de Drive. Verificá los nombres de columnas.")
+                        st.warning("⚠️ No se pudieron asociar OTs desde la planilla seleccionada. Verificá el formato del archivo.")
 
                     ots_dict = {}
                     for d in dias_ordenados:
@@ -684,7 +732,7 @@ with t_cierre:
                                 notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
                                 est_val = ""
 
-                                # Cruzar Solicitud, Fecha Columna D y Estado desde la planilla de Drive
+                                # Cruce automático con la planilla de Drive
                                 if ot_str in mapa_notif_drive:
                                     data_d = mapa_notif_drive[ot_str]
                                     if not sol_val and data_d.get("solicitud"):
