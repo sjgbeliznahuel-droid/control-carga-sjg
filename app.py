@@ -43,6 +43,17 @@ def conectar_drive():
 
 drive_service = conectar_drive()
 
+def normalizar_ot(val):
+    """Convierte cualquier valor de OT a un string numérico limpio sin decimales ni espacios"""
+    if pd.isna(val): return ""
+    s = str(val).strip()
+    if not s or s.lower() == "nan": return ""
+    s = re.sub(r'\.0$', '', s)
+    try:
+        return str(int(float(s)))
+    except Exception:
+        return s
+
 def obtener_archivos_drive():
     query = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
     resultados = drive_service.files().list(q=query, orderBy="name desc", pageSize=1000, fields="files(id, name)").execute()
@@ -99,53 +110,70 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     return fh
 
 def obtener_notificaciones_drive(file_id, mime_type=None):
-    """Lee la planilla de notificaciones seleccionada agrupando múltiples solicitudes/fechas por OT"""
+    """Lee la planilla de notificaciones seleccionada detectando encabezados y agrupando datos por OT"""
     if not file_id:
         return {}
     try:
         fh = descargar_archivo_notif_drive(file_id, mime_type)
-        df_notif = pd.read_excel(fh)
         
-        ot_col = next((c for c in df_notif.columns if "OT" in str(c).upper()), None)
-        sol_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["SOLICITUD", "SOLIC"])), None)
-        est_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["ESTADO", "STATUS"])), None)
+        # Leer sin encabezado para detectar en qué fila están los títulos
+        df_raw = pd.read_excel(fh, header=None)
+        
+        header_row = 0
+        for idx, row in df_raw.iterrows():
+            row_str = " ".join([str(v).upper() for v in row.values if pd.notna(v)])
+            if any(k in row_str for k in ["OT", "SOLICITUD", "ORDEN", "NOTIFICACI"]):
+                header_row = idx
+                break
+        
+        fh.seek(0)
+        df_notif = pd.read_excel(fh, skiprows=header_row)
+        
+        ot_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["OT", "ORDEN", "O.T."])), None)
+        sol_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["SOLICITUD", "SOLIC", "N° SOL", "NUMERO SOL"])), None)
+        est_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["ESTADO", "STATUS", "ESTADO SOL"])), None)
         
         # Columna D (4ta columna, índice 3) para Fecha de Notificación
-        fecha_col_d = df_notif.columns[3] if len(df_notif.columns) > 3 else next((c for c in df_notif.columns if "NOTIF" in str(c).upper() or "FECHA" in str(c).upper()), None)
+        if len(df_notif.columns) > 3:
+            fecha_col_d = df_notif.columns[3]
+        else:
+            fecha_col_d = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["NOTIF", "FECHA"])), None)
 
         mapa_notif_acumulado = {}
         if ot_col:
             for _, row in df_notif.iterrows():
-                if pd.notna(row[ot_col]):
-                    try:
-                        ot_key = str(int(float(str(row[ot_col]).strip())))
-                    except Exception:
-                        ot_key = str(row[ot_col]).strip()
-                    
-                    val_sol = str(row[sol_col]).strip() if sol_col and pd.notna(row[sol_col]) and str(row[sol_col]).lower() != "nan" else ""
-                    val_est = str(row[est_col]).strip() if est_col and pd.notna(row[est_col]) and str(row[est_col]).lower() != "nan" else ""
-                    
-                    val_fecha = ""
-                    if fecha_col_d and pd.notna(row[fecha_col_d]) and str(row[fecha_col_d]).lower() != "nan":
-                        v_f = row[fecha_col_d]
-                        if isinstance(v_f, (pd.Timestamp, datetime.date, datetime.datetime)):
-                            val_fecha = v_f.strftime("%d/%m/%Y")
+                ot_key = normalizar_ot(row[ot_col])
+                if not ot_key: continue
+                
+                val_sol = str(row[sol_col]).strip() if sol_col and pd.notna(row[sol_col]) and str(row[sol_col]).lower() != "nan" else ""
+                val_est = str(row[est_col]).strip() if est_col and pd.notna(row[est_col]) and str(row[est_col]).lower() != "nan" else ""
+                
+                val_fecha = ""
+                if fecha_col_d and pd.notna(row[fecha_col_d]) and str(row[fecha_col_d]).lower() != "nan":
+                    v_f = row[fecha_col_d]
+                    if isinstance(v_f, (pd.Timestamp, datetime.date, datetime.datetime)):
+                        val_fecha = v_f.strftime("%d/%m/%Y")
+                    else:
+                        str_vf = str(v_f).strip()
+                        match_dt = re.search(r'(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})', str_vf)
+                        if match_dt:
+                            val_fecha = match_dt.group(1)
                         else:
-                            val_fecha = str(v_f).strip()
+                            val_fecha = str_vf.split()[0] if " " in str_vf else str_vf
 
-                    if ot_key not in mapa_notif_acumulado:
-                        mapa_notif_acumulado[ot_key] = {
-                            "solicitudes": [],
-                            "notificaciones": [],
-                            "estados": []
-                        }
-                    
-                    if val_sol and val_sol not in mapa_notif_acumulado[ot_key]["solicitudes"]:
-                        mapa_notif_acumulado[ot_key]["solicitudes"].append(val_sol)
-                    if val_fecha and val_fecha not in mapa_notif_acumulado[ot_key]["notificaciones"]:
-                        mapa_notif_acumulado[ot_key]["notificaciones"].append(val_fecha)
-                    if val_est and val_est not in mapa_notif_acumulado[ot_key]["estados"]:
-                        mapa_notif_acumulado[ot_key]["estados"].append(val_est)
+                if ot_key not in mapa_notif_acumulado:
+                    mapa_notif_acumulado[ot_key] = {
+                        "solicitudes": [],
+                        "notificaciones": [],
+                        "estados": []
+                    }
+                
+                if val_sol and val_sol not in mapa_notif_acumulado[ot_key]["solicitudes"]:
+                    mapa_notif_acumulado[ot_key]["solicitudes"].append(val_sol)
+                if val_fecha and val_fecha not in mapa_notif_acumulado[ot_key]["notificaciones"]:
+                    mapa_notif_acumulado[ot_key]["notificaciones"].append(val_fecha)
+                if val_est and val_est not in mapa_notif_acumulado[ot_key]["estados"]:
+                    mapa_notif_acumulado[ot_key]["estados"].append(val_est)
 
         # Formatear agrupando con guiones
         mapa_notif_final = {}
@@ -621,6 +649,11 @@ with t_cierre:
                 with st.spinner("Procesando OTs y cruzando notificaciones desde Drive..."):
                     mapa_notif_drive = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else {}
 
+                    if mapa_notif_drive:
+                        st.info(f"💡 Se leyeron **{len(mapa_notif_drive)} OTs** registradas en la planilla de Drive seleccionada.")
+                    elif notif_file_id:
+                        st.warning("⚠️ No se encontraron OTs asociadas en la planilla de Drive. Verificá los nombres de columnas.")
+
                     ots_dict = {}
                     for d in dias_ordenados:
                         if d < desde_dia_sel or d > hasta_dia_sel: continue
@@ -638,10 +671,8 @@ with t_cierre:
 
                         if ot_col:
                             for _, row_r in dfc_ot.iterrows():
-                                ot_val = row_r[ot_col]
-                                if pd.isna(ot_val) or str(ot_val).strip() == "": continue
-                                try: ot_str = str(int(float(str(ot_val).strip())))
-                                except Exception: ot_str = str(ot_val).strip()
+                                ot_str = normalizar_ot(row_r[ot_col])
+                                if not ot_str: continue
 
                                 sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
                                 
