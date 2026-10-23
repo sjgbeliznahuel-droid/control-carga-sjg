@@ -771,10 +771,26 @@ with t_cierre:
 
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
-                    k_c1, k_c2, k_c3 = st.columns(3)
-                    k_c1.metric("📌 Total OTs Únicas", len(df_ots_unicas))
-                    k_c2.metric("✅ OTs con Solicitud", len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() != ""]))
-                    k_c3.metric("⏳ OTs Pendientes", len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() == ""]))
+                    
+                    # Cálculo dinámico de métricas / contadores
+                    tot_ots = len(df_ots_unicas)
+                    con_solic = len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() != ""])
+                    
+                    es_aprobada = df_ots_unicas.apply(
+                        lambda r: bool(
+                            re.search(r'APROB|LIBER|NOTIF|FINAL', str(r["Estado Solicitud"]).upper()) or 
+                            (pd.notna(r["Fecha notificación final"]) and str(r["Fecha notificación final"]).strip() != "")
+                        ), axis=1
+                    )
+                    
+                    ots_aprobadas = int(es_aprobada.sum())
+                    ots_pendientes = tot_ots - ots_aprobadas
+
+                    k_c1, k_c2, k_c3, k_c4 = st.columns(4)
+                    k_c1.metric("📌 Total OTs Únicas", tot_ots)
+                    k_c2.metric("📋 OTs con Solicitud", con_solic)
+                    k_c3.metric("🟢 OTs Aprobadas / Notificadas", ots_aprobadas)
+                    k_c4.metric("⏳ OTs Pendientes", ots_pendientes)
                     
                     st.divider()
                     st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
