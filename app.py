@@ -22,6 +22,8 @@ st.set_page_config(
 # Inicializar estado de sesión
 if "mostrar_reporte" not in st.session_state:
     st.session_state["mostrar_reporte"] = False
+if "cruce_cierre_ejecutado" not in st.session_state:
+    st.session_state["cruce_cierre_ejecutado"] = False
 
 # --- CONFIGURACIÓN GOOGLE SHEETS & DRIVE ---
 SHEET_ID = "1gGkGjO-ZX7auYdlKAuI9rLEN_KoVah3vdnz7WofcHq0"
@@ -606,123 +608,134 @@ with t_cierre:
                     notif_file_id = None
                     notif_mime_type = None
 
-            # Cruce de datos con la planilla de Drive
-            mapa_notif_drive = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else {}
+            # BOTÓN DE EJECUCIÓN DEL CRUCE
+            st.write("")
+            col_btn_ej, _ = st.columns([1, 3])
+            with col_btn_ej:
+                btn_ejecutar_cierre = st.button("🚀 Ejecutar Cruce de OTs", type="primary")
 
-            ots_dict = {}
-            for d in dias_ordenados:
-                if d < desde_dia_sel or d > hasta_dia_sel: continue
-                s_name = dias_disponibles_map[d]
-                dfc_raw = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, header=None)
-                header_row_idx = next((idx for idx, row in dfc_raw.iterrows() if any(k in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) for k in ["LEGAJO", "OBRA", "APELLIDO", "OT"])), 0)
-                dfc_ot = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, skiprows=header_row_idx)
+            if btn_ejecutar_cierre:
+                st.session_state["cruce_cierre_ejecutado"] = True
 
-                ot_col = next((c for c in dfc_ot.columns if "OT" in str(c).upper()), None)
-                sol_col = next((c for c in dfc_ot.columns if "SOLICITUD" in str(c).upper()), None)
-                fecha_col = next((c for c in dfc_ot.columns if "FECHA" in str(c).upper()), None)
-                notif_col = next((c for c in dfc_ot.columns if "NOTIFICA" in str(c).upper()), None)
-                sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA", "ÁREA"])), None)
-                resp_col = next((c for c in dfc_ot.columns if "RESPONSABLE" in str(c).upper()), None)
+            if st.session_state["cruce_cierre_ejecutado"]:
+                with st.spinner("Procesando OTs y cruzando notificaciones desde Drive..."):
+                    mapa_notif_drive = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else {}
 
-                if ot_col:
-                    for _, row_r in dfc_ot.iterrows():
-                        ot_val = row_r[ot_col]
-                        if pd.isna(ot_val) or str(ot_val).strip() == "": continue
-                        try: ot_str = str(int(float(str(ot_val).strip())))
-                        except Exception: ot_str = str(ot_val).strip()
+                    ots_dict = {}
+                    for d in dias_ordenados:
+                        if d < desde_dia_sel or d > hasta_dia_sel: continue
+                        s_name = dias_disponibles_map[d]
+                        dfc_raw = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, header=None)
+                        header_row_idx = next((idx for idx, row in dfc_raw.iterrows() if any(k in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) for k in ["LEGAJO", "OBRA", "APELLIDO", "OT"])), 0)
+                        dfc_ot = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, skiprows=header_row_idx)
 
-                        sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
-                        
-                        if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan":
-                            fecha_val = str(row_r[fecha_col]).strip()
-                        else:
-                            fecha_val = s_name
+                        ot_col = next((c for c in dfc_ot.columns if "OT" in str(c).upper()), None)
+                        sol_col = next((c for c in dfc_ot.columns if "SOLICITUD" in str(c).upper()), None)
+                        fecha_col = next((c for c in dfc_ot.columns if "FECHA" in str(c).upper()), None)
+                        notif_col = next((c for c in dfc_ot.columns if "NOTIFICA" in str(c).upper()), None)
+                        sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA", "ÁREA"])), None)
+                        resp_col = next((c for c in dfc_ot.columns if "RESPONSABLE" in str(c).upper()), None)
 
-                        notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
-                        est_val = ""
+                        if ot_col:
+                            for _, row_r in dfc_ot.iterrows():
+                                ot_val = row_r[ot_col]
+                                if pd.isna(ot_val) or str(ot_val).strip() == "": continue
+                                try: ot_str = str(int(float(str(ot_val).strip())))
+                                except Exception: ot_str = str(ot_val).strip()
 
-                        # Cruzar Solicitud, Fecha Columna D y Estado desde la planilla de Drive
-                        if ot_str in mapa_notif_drive:
-                            data_d = mapa_notif_drive[ot_str]
-                            if not sol_val and data_d.get("solicitud"):
-                                sol_val = data_d["solicitud"]
-                            if not notif_val and data_d.get("notificacion"):
-                                notif_val = data_d["notificacion"]
-                            if data_d.get("estado"):
-                                est_val = data_d["estado"]
+                                sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
+                                
+                                if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan":
+                                    fecha_val = str(row_r[fecha_col]).strip()
+                                else:
+                                    fecha_val = s_name
 
-                        sector_val = str(row_r[sector_col]).strip() if sector_col and pd.notna(row_r[sector_col]) and str(row_r[sector_col]).lower() != "nan" else ""
-                        resp_val = str(row_r[resp_col]).strip() if resp_col and pd.notna(row_r[resp_col]) and str(row_r[resp_col]).lower() != "nan" else ""
+                                notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
+                                est_val = ""
 
-                        if ot_str not in ots_dict:
-                            ots_dict[ot_str] = {
-                                "OT Programada": ot_str, 
-                                "N° Solicitud": sol_val, 
-                                "Estado Solicitud": est_val,
-                                "Fecha": fecha_val,
-                                "Fecha notificación final": notif_val,
-                                "Sector / Obra": sector_val,
-                                "Responsable del Trabajo": resp_val, 
-                                "Días Presente": [f"Día {d:02d}"], 
-                                "Apariciones": 1
+                                # Cruzar Solicitud, Fecha Columna D y Estado desde la planilla de Drive
+                                if ot_str in mapa_notif_drive:
+                                    data_d = mapa_notif_drive[ot_str]
+                                    if not sol_val and data_d.get("solicitud"):
+                                        sol_val = data_d["solicitud"]
+                                    if not notif_val and data_d.get("notificacion"):
+                                        notif_val = data_d["notificacion"]
+                                    if data_d.get("estado"):
+                                        est_val = data_d["estado"]
+
+                                sector_val = str(row_r[sector_col]).strip() if sector_col and pd.notna(row_r[sector_col]) and str(row_r[sector_col]).lower() != "nan" else ""
+                                resp_val = str(row_r[resp_col]).strip() if resp_col and pd.notna(row_r[resp_col]) and str(row_r[resp_col]).lower() != "nan" else ""
+
+                                if ot_str not in ots_dict:
+                                    ots_dict[ot_str] = {
+                                        "OT Programada": ot_str, 
+                                        "N° Solicitud": sol_val, 
+                                        "Estado Solicitud": est_val,
+                                        "Fecha": fecha_val,
+                                        "Fecha notificación final": notif_val,
+                                        "Sector / Obra": sector_val,
+                                        "Responsable del Trabajo": resp_val, 
+                                        "Días Presente": [f"Día {d:02d}"], 
+                                        "Apariciones": 1
+                                    }
+                                else:
+                                    ots_dict[ot_str]["Apariciones"] += 1
+                                    if f"Día {d:02d}" not in ots_dict[ot_str]["Días Presente"]: ots_dict[ot_str]["Días Presente"].append(f"Día {d:02d}")
+                                    if not ots_dict[ot_str]["N° Solicitud"] and sol_val: ots_dict[ot_str]["N° Solicitud"] = sol_val
+                                    if not ots_dict[ot_str]["Estado Solicitud"] and est_val: ots_dict[ot_str]["Estado Solicitud"] = est_val
+                                    if not ots_dict[ot_str]["Fecha"] and fecha_val: ots_dict[ot_str]["Fecha"] = fecha_val
+                                    if not ots_dict[ot_str]["Fecha notificación final"] and notif_val: ots_dict[ot_str]["Fecha notificación final"] = notif_val
+                                    if not ots_dict[ot_str]["Sector / Obra"] and sector_val: ots_dict[ot_str]["Sector / Obra"] = sector_val
+                                    if not ots_dict[ot_str]["Responsable del Trabajo"] and resp_val: ots_dict[ot_str]["Responsable del Trabajo"] = resp_val
+
+                    df_ots_unicas = pd.DataFrame(list(ots_dict.values()))
+
+                if not df_ots_unicas.empty:
+                    df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
+                    k_c1, k_c2, k_c3 = st.columns(3)
+                    k_c1.metric("📌 Total OTs Únicas", len(df_ots_unicas))
+                    k_c2.metric("✅ OTs con Solicitud", len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() != ""]))
+                    k_c3.metric("⏳ OTs Pendientes", len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() == ""]))
+                    
+                    st.divider()
+                    st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
+                    
+                    edited_ots_df = st.data_editor(
+                        df_ots_unicas, 
+                        column_config={
+                            "OT Programada": st.column_config.TextColumn("OT Programada", disabled=True), 
+                            "N° Solicitud": st.column_config.TextColumn("N° Solicitud"),
+                            "Estado Solicitud": st.column_config.TextColumn("Estado Solicitud"),
+                            "Fecha": st.column_config.TextColumn("Fecha"),
+                            "Fecha notificación final": st.column_config.TextColumn("Fecha notificación final"),
+                            "Sector / Obra": st.column_config.TextColumn("Sector / Obra"),
+                            "Responsable del Trabajo": st.column_config.TextColumn("Responsable del Trabajo"), 
+                            "Días Presente": st.column_config.TextColumn("Días Presente", disabled=True), 
+                            "Apariciones": st.column_config.NumberColumn("Apariciones", disabled=True)
+                        }, 
+                        use_container_width=True, 
+                        key="editor_ots_cierre"
+                    )
+
+                    if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
+                        try:
+                            cambios_ots = {
+                                str(r["OT Programada"]).strip(): {
+                                    "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
+                                    "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else "",
+                                    "Fecha": str(r["Fecha"]).strip() if pd.notna(r["Fecha"]) and str(r["Fecha"]).lower() != "nan" else "",
+                                    "FechaNotificacion": str(r["Fecha notificación final"]).strip() if pd.notna(r["Fecha notificación final"]) and str(r["Fecha notificación final"]).lower() != "nan" else "",
+                                    "Sector": str(r["Sector / Obra"]).strip() if pd.notna(r["Sector / Obra"]) and str(r["Sector / Obra"]).lower() != "nan" else "",
+                                    "Responsable": str(r["Responsable del Trabajo"]).strip() if pd.notna(r["Responsable del Trabajo"]) and str(r["Responsable del Trabajo"]).lower() != "nan" else ""
+                                } for _, r in edited_ots_df.iterrows()
                             }
-                        else:
-                            ots_dict[ot_str]["Apariciones"] += 1
-                            if f"Día {d:02d}" not in ots_dict[ot_str]["Días Presente"]: ots_dict[ot_str]["Días Presente"].append(f"Día {d:02d}")
-                            if not ots_dict[ot_str]["N° Solicitud"] and sol_val: ots_dict[ot_str]["N° Solicitud"] = sol_val
-                            if not ots_dict[ot_str]["Estado Solicitud"] and est_val: ots_dict[ot_str]["Estado Solicitud"] = est_val
-                            if not ots_dict[ot_str]["Fecha"] and fecha_val: ots_dict[ot_str]["Fecha"] = fecha_val
-                            if not ots_dict[ot_str]["Fecha notificación final"] and notif_val: ots_dict[ot_str]["Fecha notificación final"] = notif_val
-                            if not ots_dict[ot_str]["Sector / Obra"] and sector_val: ots_dict[ot_str]["Sector / Obra"] = sector_val
-                            if not ots_dict[ot_str]["Responsable del Trabajo"] and resp_val: ots_dict[ot_str]["Responsable del Trabajo"] = resp_val
-
-            df_ots_unicas = pd.DataFrame(list(ots_dict.values()))
-            if not df_ots_unicas.empty:
-                df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
-                k_c1, k_c2, k_c3 = st.columns(3)
-                k_c1.metric("📌 Total OTs Únicas", len(df_ots_unicas))
-                k_c2.metric("✅ OTs con Solicitud", len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() != ""]))
-                k_c3.metric("⏳ OTs Pendientes", len(df_ots_unicas[df_ots_unicas["N° Solicitud"].astype(str).str.strip() == ""]))
-                
-                st.divider()
-                st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
-                
-                edited_ots_df = st.data_editor(
-                    df_ots_unicas, 
-                    column_config={
-                        "OT Programada": st.column_config.TextColumn("OT Programada", disabled=True), 
-                        "N° Solicitud": st.column_config.TextColumn("N° Solicitud"),
-                        "Estado Solicitud": st.column_config.TextColumn("Estado Solicitud"),
-                        "Fecha": st.column_config.TextColumn("Fecha"),
-                        "Fecha notificación final": st.column_config.TextColumn("Fecha notificación final"),
-                        "Sector / Obra": st.column_config.TextColumn("Sector / Obra"),
-                        "Responsable del Trabajo": st.column_config.TextColumn("Responsable del Trabajo"), 
-                        "Días Presente": st.column_config.TextColumn("Días Presente", disabled=True), 
-                        "Apariciones": st.column_config.NumberColumn("Apariciones", disabled=True)
-                    }, 
-                    use_container_width=True, 
-                    key="editor_ots_cierre"
-                )
-
-                if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
-                    try:
-                        cambios_ots = {
-                            str(r["OT Programada"]).strip(): {
-                                "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
-                                "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else "",
-                                "Fecha": str(r["Fecha"]).strip() if pd.notna(r["Fecha"]) and str(r["Fecha"]).lower() != "nan" else "",
-                                "FechaNotificacion": str(r["Fecha notificación final"]).strip() if pd.notna(r["Fecha notificación final"]) and str(r["Fecha notificación final"]).lower() != "nan" else "",
-                                "Sector": str(r["Sector / Obra"]).strip() if pd.notna(r["Sector / Obra"]) and str(r["Sector / Obra"]).lower() != "nan" else "",
-                                "Responsable": str(r["Responsable del Trabajo"]).strip() if pd.notna(r["Responsable del Trabajo"]) and str(r["Responsable del Trabajo"]).lower() != "nan" else ""
-                            } for _, r in edited_ots_df.iterrows()
-                        }
-                        with st.spinner("Sincronizando con Google Sheets..."):
-                            res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
-                        if res.status_code == 200:
-                            st.success("🟢 ¡Sincronizado con éxito!")
-                        else: st.error(f"Error {res.status_code}")
-                    except Exception as e: st.error(f"Error al enviar datos: {e}")
-            else: st.warning("No se encontraron OTs cargadas.")
+                            with st.spinner("Sincronizando con Google Sheets..."):
+                                res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
+                            if res.status_code == 200:
+                                st.success("🟢 ¡Sincronizado con éxito!")
+                            else: st.error(f"Error {res.status_code}")
+                        except Exception as e: st.error(f"Error al enviar datos: {e}")
+                else: st.warning("No se encontraron OTs cargadas.")
         else: st.info("No se detectaron días cargados en la planilla.")
     else: st.info("Conectando con Google Sheets...")
 
