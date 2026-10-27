@@ -798,13 +798,10 @@ with t_cierre:
                     # Función de evaluación estricta del Estado
                     def evaluar_estado_ot(row):
                         est = str(row["Estado Solicitud"]).strip().upper()
-                        # Prioridad 1: Si explícitamente dice Pendiente / En revisión / Creada
                         if any(k in est for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
                             return "PENDIENTE"
-                        # Prioridad 2: Si explícitamente dice Aprobada / Liberada / Cerrada / Notificada
                         if any(k in est for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]):
                             return "APROBADA"
-                        # Prioridad 3: Si tiene Fecha de Notificación Final registrada
                         f_notif = str(row["Fecha notificación final"]).strip()
                         if f_notif and f_notif.lower() not in ["nan", "none", "", "-"]:
                             return "APROBADA"
@@ -825,24 +822,41 @@ with t_cierre:
                         k_c3.metric("🟢 OTs Aprobadas / Notificadas", ots_aprobadas)
                         k_c4.metric("⏳ OTs Pendientes", ots_pendientes)
 
-                    if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
-                        try:
-                            cambios_ots = {
-                                str(r["OT Programada"]).strip(): {
-                                    "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
-                                    "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else "",
-                                    "Fecha": str(r["Fecha"]).strip() if pd.notna(r["Fecha"]) and str(r["Fecha"]).lower() != "nan" else "",
-                                    "FechaNotificacion": str(r["Fecha notificación final"]).strip() if pd.notna(r["Fecha notificación final"]) and str(r["Fecha notificación final"]).lower() != "nan" else "",
-                                    "Sector": str(r["Sector / Obra"]).strip() if pd.notna(r["Sector / Obra"]) and str(r["Sector / Obra"]).lower() != "nan" else "",
-                                    "Responsable": str(r["Responsable del Trabajo"]).strip() if pd.notna(r["Responsable del Trabajo"]) and str(r["Responsable del Trabajo"]).lower() != "nan" else ""
-                                } for _, r in edited_ots_df.iterrows()
-                            }
-                            with st.spinner("Sincronizando con Google Sheets..."):
-                                res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
-                            if res.status_code == 200:
-                                st.success("🟢 ¡Sincronizado con éxito!")
-                            else: st.error(f"Error {res.status_code}")
-                        except Exception as e: st.error(f"Error al enviar datos: {e}")
+                    st.write("")
+                    col_b_guardar, col_b_descargar = st.columns([1, 1])
+
+                    with col_b_guardar:
+                        if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
+                            try:
+                                cambios_ots = {
+                                    str(r["OT Programada"]).strip(): {
+                                        "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
+                                        "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else "",
+                                        "Fecha": str(r["Fecha"]).strip() if pd.notna(r["Fecha"]) and str(r["Fecha"]).lower() != "nan" else "",
+                                        "FechaNotificacion": str(r["Fecha notificación final"]).strip() if pd.notna(r["Fecha notificación final"]) and str(r["Fecha notificación final"]).lower() != "nan" else "",
+                                        "Sector": str(r["Sector / Obra"]).strip() if pd.notna(r["Sector / Obra"]) and str(r["Sector / Obra"]).lower() != "nan" else "",
+                                        "Responsable": str(r["Responsable del Trabajo"]).strip() if pd.notna(r["Responsable del Trabajo"]) and str(r["Responsable del Trabajo"]).lower() != "nan" else ""
+                                    } for _, r in edited_ots_df.iterrows()
+                                }
+                                with st.spinner("Sincronizando con Google Sheets..."):
+                                    res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
+                                if res.status_code == 200:
+                                    st.success("🟢 ¡Sincronizado con éxito!")
+                                else: st.error(f"Error {res.status_code}")
+                            except Exception as e: st.error(f"Error al enviar datos: {e}")
+
+                    with col_b_descargar:
+                        out_cierre = io.BytesIO()
+                        with pd.ExcelWriter(out_cierre, engine="openpyxl") as writer:
+                            edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
+                        out_cierre.seek(0)
+
+                        st.download_button(
+                            label="📥 Descargar Cierre de OTs (Excel)",
+                            data=out_cierre,
+                            file_name=f"Cierre_OTs_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
                 else: st.warning("No se encontraron OTs cargadas.")
         else: st.info("No se detectaron días cargados en la planilla.")
     else: st.info("Conectando con Google Sheets...")
