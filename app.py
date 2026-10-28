@@ -250,12 +250,9 @@ with col_refrescar:
     st.write("")
     if st.button("🔄 Refrescar App", help="Limpia la caché y fuerza la recarga de datos sin cerrar la aplicación"):
         st.cache_data.clear()
-        st.cache_resource.clear()
-        st.session_state.clear()
-        if hasattr(st, "rerun"):
-            st.rerun()
-        else:
-            st.experimental_rerun()
+        st.session_state["mostrar_reporte"] = False
+        st.session_state["cruce_cierre_ejecutado"] = False
+        st.rerun()
 
 st.divider()
 
@@ -411,13 +408,11 @@ with t_reporte:
         with col_btn1:
             if st.button("🚀 Ejecutar Cruce Estricto por Fecha", type="primary"):
                 st.session_state["mostrar_reporte"] = True
-                if hasattr(st, "rerun"): st.rerun()
-                else: st.experimental_rerun()
+                st.rerun()
         with col_btn2:
             if st.button("🔄 Sincronizar Todo (Drive y Sheets)"):
                 st.session_state["mostrar_reporte"] = True
-                if hasattr(st, "rerun"): st.rerun()
-                else: st.experimental_rerun()
+                st.rerun()
 
         if st.session_state["mostrar_reporte"]:
             try:
@@ -591,8 +586,7 @@ with t_reporte:
 
                                     st.success("¡Archivo actualizado en Google Drive con éxito!")
                                     time.sleep(2) 
-                                    if hasattr(st, "rerun"): st.rerun()
-                                    else: st.experimental_rerun()
+                                    st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al escribir en Drive: {e}")
                             else: st.info("Elegí alguna novedad del menú antes de Guardar.")
