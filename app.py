@@ -240,12 +240,23 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
 # --- LOGO VECTORIAL ---
 SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
 
-col_logo, col_titulo = st.columns([1.2, 3])
+col_logo, col_titulo, col_refrescar = st.columns([1.2, 2.3, 0.9])
 with col_logo:
     st.markdown(SJG_LOGO_SVG, unsafe_allow_html=True)
 with col_titulo:
     st.title("Sistema de Control y Validación de Personal")
     st.caption("Conciliación automatizada de Partes de Carga vs. Fichadas en Puerta (Cloud - En Vivo)")
+with col_refrescar:
+    st.write("")
+    if st.button("🔄 Refrescar App", help="Limpia la caché y fuerza la recarga de datos sin cerrar la aplicación"):
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.session_state.clear()
+        if hasattr(st, "rerun"):
+            st.rerun()
+        else:
+            st.experimental_rerun()
+
 st.divider()
 
 MESES_NOMBRES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
