@@ -803,8 +803,13 @@ with t_cierre:
                     # Función de evaluación estricta del Estado
                     def evaluar_estado_ot(row):
                         est = str(row["Estado Solicitud"]).strip().upper()
+                        # Prioridad 1: Rechazadas / Canceladas / Anuladas
+                        if any(k in est for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
+                            return "RECHAZADA"
+                        # Prioridad 2: Pendientes
                         if any(k in est for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
                             return "PENDIENTE"
+                        # Prioridad 3: Aprobadas / Liberadas / Notificadas
                         if any(k in est for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]):
                             return "APROBADA"
                         f_notif = str(row["Fecha notificación final"]).strip()
@@ -817,15 +822,17 @@ with t_cierre:
                     tot_ots = len(edited_ots_df)
                     con_solic = len(edited_ots_df[edited_ots_df["N° Solicitud"].astype(str).str.strip() != ""])
                     ots_aprobadas = int((estados_eval == "APROBADA").sum())
+                    ots_rechazadas = int((estados_eval == "RECHAZADA").sum())
                     ots_pendientes = int((estados_eval == "PENDIENTE").sum())
 
-                    # Renderizado de KPIs en el contenedor superior
+                    # Renderizado de KPIs en el contenedor superior (5 columnas)
                     with kpi_container:
-                        k_c1, k_c2, k_c3, k_c4 = st.columns(4)
+                        k_c1, k_c2, k_c3, k_c4, k_c5 = st.columns(5)
                         k_c1.metric("📌 Total OTs Únicas", tot_ots)
                         k_c2.metric("📋 OTs con Solicitud", con_solic)
-                        k_c3.metric("🟢 OTs Aprobadas / Notificadas", ots_aprobadas)
-                        k_c4.metric("⏳ OTs Pendientes", ots_pendientes)
+                        k_c3.metric("🟢 OTs Aprobadas", ots_aprobadas)
+                        k_c4.metric("🔴 OTs Rechazadas", ots_rechazadas)
+                        k_c5.metric("⏳ OTs Pendientes", ots_pendientes)
 
                     st.write("")
                     col_b_guardar, col_b_descargar = st.columns([1, 1])
