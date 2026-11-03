@@ -104,14 +104,10 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     return fh
 
 def cargar_dataframe_fichada(fh_bytes):
-    """Carga de forma flexible la solapa Hoja2 o en su defecto la primera solapa disponible"""
+    """Carga de forma flexible la solapa Hoja2 o en su defecto la primera solapa disponible sin header previo"""
     xl = pd.ExcelFile(fh_bytes)
-    if "Hoja2" in xl.sheet_names:
-        return xl.parse("Hoja2")
-    elif len(xl.sheet_names) > 1:
-        return xl.parse(xl.sheet_names[1])
-    else:
-        return xl.parse(xl.sheet_names[0])
+    nombre_hoja = "Hoja2" if "Hoja2" in xl.sheet_names else (xl.sheet_names[1] if len(xl.sheet_names) > 1 else xl.sheet_names[0])
+    return pd.read_excel(fh_bytes, sheet_name=nombre_hoja, header=None)
 
 def obtener_notificaciones_drive(file_id, mime_type=None):
     if not file_id: return {}, {}
@@ -276,31 +272,43 @@ def extraer_horas(val):
     if match: return float(match.group(1).replace(",", "."))
     return 0.0
 
-def calcular_horas_fichada(ing, sal):
+def convertir_a_horas_decimal(val):
+    """Convierte cualquier representación de hora (float, int, 'HH:MM', '6.0', datetime.time) a horas decimales"""
+    if pd.isna(val) or val == "" or str(val).strip().lower() in ["--:--", "nan", "none", "null"]:
+        return None
     try:
-        i, s = float(ing), float(sal)
-        return s - i if s >= i else (24.0 - i) + s
-    except Exception: return 0.0
-
-def formatear_horario(val):
-    if pd.isna(val) or val == "" or str(val).strip().lower() in ["nan", "none", "--:--"]:
-        return "--:--"
-    try:
-        if isinstance(val, (datetime.time, pd.Timestamp, datetime.datetime)):
-            return val.strftime("%H:%M")
-        f_val = float(str(val).replace(",", "."))
-        horas = int(f_val)
-        minutos = int(round((f_val - horas) * 60))
-        if minutos >= 60:
-            horas += 1
-            minutos -= 60
-        return f"{horas:02d}:{minutos:02d}"
-    except Exception:
-        s_val = str(val).strip()
+        if isinstance(val, datetime.time):
+            return val.hour + val.minute / 60.0
+        if isinstance(val, (pd.Timestamp, datetime.datetime)):
+            return val.hour + val.minute / 60.0
+        s_val = str(val).strip().replace(",", ".")
         if ":" in s_val:
             parts = s_val.split(":")
-            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-        return s_val
+            h = float(parts[0])
+            m = float(parts[1]) if len(parts) > 1 else 0.0
+            return h + m / 60.0
+        f_val = float(s_val)
+        return f_val
+    except Exception:
+        return None
+
+def calcular_horas_fichada(ing, sal):
+    i = convertir_a_horas_decimal(ing)
+    s = convertir_a_horas_decimal(sal)
+    if i is None or s is None:
+        return 0.0
+    return s - i if s >= i else (24.0 - i) + s
+
+def formatear_horario(val):
+    dec = convertir_a_horas_decimal(val)
+    if dec is None:
+        return "--:--"
+    horas = int(dec)
+    minutos = int(round((dec - horas) * 60))
+    if minutos >= 60:
+        horas += 1
+        minutos -= 60
+    return f"{horas:02d}:{minutos:02d}"
 
 t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena, t_detalle = st.tabs([
     "📥 Carga de Fichadas/RRHH", "📂 1. Carga", "⚙️ 2. Reglas", "📊 3. Reporte", "📋 Cierre de Período", "⏱️ 4. Horas y Período Personalizado", "🔍 5. Control Horarios y Fichadas"
@@ -326,7 +334,6 @@ with t_carga:
             else:
                 fichadas_por_mes = {}
                 for f in archivos_guardados:
-                    # Regex ultra-flexible para capturar nombres tipo Fichada_09-10, fichada 9-10, FICHADA-9-10
                     match = re.search(r"fichada[_\s]*(\d{1,2})[-/\.](\d{1,2})", f, re.IGNORECASE)
                     if match:
                         dia, mes = int(match.group(1)), int(match.group(2))
@@ -981,7 +988,7 @@ with t_detalle:
 
                     ing_str = formatear_horario(ing)
                     sal_str = formatear_horario(sal)
-                    hs_reloj = calcular_horas_fichada(ing, sal) if (pd.notna(ing) and pd.notna(sal)) else 0.0
+                    hs_reloj = calcular_horas_fichada(ing, sal)
 
                     hs_cargadas = 0.0
                     if leg_clean is not None and leg_clean in mapa_horas_cargadas:
@@ -993,7 +1000,7 @@ with t_detalle:
                         estado_cargas = "🚫 Sector Excluido"
                     elif hs_cargadas == 0.0 and hs_reloj > 0:
                         estado_cargas = "🔴 Sin Horas Cargadas"
-                    elif abs(hs_cargadas - hs_reloj) <= 0.25:
+                    elif abs(hs_cargadas - hs_reloj) <= 0.25 and hs_reloj > 0:
                         estado_cargas = "🟢 Carga Completa / Correcta"
                     elif hs_cargadas > 0:
                         estado_cargas = f"⚠️ Discrepancia (Cargado: {hs_cargadas:.1f}h / Fichado: {hs_reloj:.1f}h)"
