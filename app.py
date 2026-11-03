@@ -120,7 +120,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
         fh = descargar_archivo_notif_drive(file_id, mime_type)
         df_raw = pd.read_excel(fh, header=None)
         
-        # Buscar fila de encabezados en las primeras 15 filas
         header_row = 0
         for idx in range(min(15, len(df_raw))):
             row_vals = [str(v).upper() for v in df_raw.iloc[idx].values if pd.notna(v)]
@@ -133,7 +132,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
         df_notif = df_raw.iloc[header_row + 1:].copy()
         df_notif.columns = raw_headers
         
-        # 1. Identificar columna OT
         ot_col = None
         for c in df_notif.columns:
             c_str = str(c).strip().upper()
@@ -153,7 +151,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                     ot_col = c
                     break
 
-        # 2. Identificar columna Solicitud
         sol_col = None
         for c in df_notif.columns:
             c_str = str(c).strip().upper()
@@ -161,7 +158,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                 sol_col = c
                 break
 
-        # 3. Identificar columna Estado
         est_col = None
         for c in df_notif.columns:
             c_str = str(c).strip().upper()
@@ -169,7 +165,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                 est_col = c
                 break
 
-        # 4. Identificar columna Fecha (Columna D = Índice 3 por defecto)
         fecha_col = None
         if len(df_notif.columns) > 3:
             fecha_col = df_notif.columns[3]
@@ -329,6 +324,29 @@ def calcular_horas_fichada(ing, sal):
         i, s = float(ing), float(sal)
         return s - i if s >= i else (24.0 - i) + s
     except Exception: return 0.0
+
+def formatear_horario(val):
+    """Convierte horas decimales o texto a formato de reloj HH:MM limpio"""
+    if pd.isna(val) or val == "" or str(val).strip().lower() in ["nan", "none", "--:--"]:
+        return "--:--"
+    try:
+        if isinstance(val, datetime.time):
+            return val.strftime("%H:%M")
+        if isinstance(val, (pd.Timestamp, datetime.datetime)):
+            return val.strftime("%H:%M")
+        f_val = float(str(val).replace(",", "."))
+        horas = int(f_val)
+        minutos = int(round((f_val - horas) * 60))
+        if minutos >= 60:
+            horas += 1
+            minutos -= 60
+        return f"{horas:02d}:{minutos:02d}"
+    except Exception:
+        s_val = str(val).strip()
+        if ":" in s_val:
+            parts = s_val.split(":")
+            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        return s_val
 
 t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena, t_detalle = st.tabs([
     "📥 Carga de Fichadas/RRHH", "📂 1. Carga", "⚙️ 2. Reglas", "📊 3. Reporte", "📋 Cierre de Período", "⏱️ 4. Horas y Período Personalizado", "🔍 5. Control Horarios y Fichadas"
@@ -689,7 +707,6 @@ with t_cierre:
                     notif_file_id = None
                     notif_mime_type = None
 
-            # BOTÓN DE EJECUCIÓN DEL CRUCE
             st.write("")
             col_btn_ej, _ = st.columns([1, 3])
             with col_btn_ej:
@@ -737,7 +754,6 @@ with t_cierre:
                                 notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
                                 est_val = ""
 
-                                # Cruce automático con la planilla de Drive
                                 if ot_str in mapa_notif_drive:
                                     data_d = mapa_notif_drive[ot_str]
                                     if not sol_val and data_d.get("solicitud"):
@@ -777,7 +793,6 @@ with t_cierre:
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
                     
-                    # Contenedor para mostrar KPIs superiores en tiempo real
                     kpi_container = st.container()
                     
                     st.divider()
@@ -800,16 +815,12 @@ with t_cierre:
                         key="editor_ots_cierre"
                     )
 
-                    # Función de evaluación estricta del Estado
                     def evaluar_estado_ot(row):
                         est = str(row["Estado Solicitud"]).strip().upper()
-                        # Prioridad 1: Rechazadas / Canceladas / Anuladas
                         if any(k in est for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
                             return "RECHAZADA"
-                        # Prioridad 2: Pendientes
                         if any(k in est for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
                             return "PENDIENTE"
-                        # Prioridad 3: Aprobadas / Liberadas / Notificadas
                         if any(k in est for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]):
                             return "APROBADA"
                         f_notif = str(row["Fecha notificación final"]).strip()
@@ -825,7 +836,6 @@ with t_cierre:
                     ots_rechazadas = int((estados_eval == "RECHAZADA").sum())
                     ots_pendientes = int((estados_eval == "PENDIENTE").sum())
 
-                    # Renderizado de KPIs en el contenedor superior (5 columnas)
                     with kpi_container:
                         k_c1, k_c2, k_c3, k_c4, k_c5 = st.columns(5)
                         k_c1.metric("📌 Total OTs Únicas", tot_ots)
@@ -1030,8 +1040,8 @@ with t_detalle:
                     nom_str = str(nv).strip() if pd.notna(nv) else ""
                     if not nom_str and leg_clean is None: continue
 
-                    ing_str = str(ing).strip() if pd.notna(ing) else "--:--"
-                    sal_str = str(sal).strip() if pd.notna(sal) else "--:--"
+                    ing_str = formatear_horario(ing)
+                    sal_str = formatear_horario(sal)
                     hs_reloj = calcular_horas_fichada(ing, sal) if (pd.notna(ing) and pd.notna(sal)) else 0.0
 
                     hs_cargadas = 0.0
@@ -1052,12 +1062,12 @@ with t_detalle:
                         estado_cargas = "⚪ Sin Registro"
 
                     filas_detalle.append({
-                        "Legajo": leg_clean if leg_clean else "SIN LEGAJO",
+                        "Legajo": str(leg_clean) if leg_clean else "SIN LEGAJO",
                         "Nombre y Apellido": nom_str,
                         "Horario Desde (Ingreso)": ing_str,
                         "Horario Hasta (Salida)": sal_str,
-                        "Horas Reloj Fichadas": round(hs_reloj, 2),
-                        "Horas Cargadas en Planilla": round(hs_cargadas, 2),
+                        "Horas Reloj Fichadas": round(hs_reloj, 1),
+                        "Horas Cargadas en Planilla": round(hs_cargadas, 1),
                         "Estado de Validación": estado_cargas
                     })
 
@@ -1072,17 +1082,29 @@ with t_detalle:
 
                     st.divider()
 
-                    # Filtro selector por Estado
-                    filtro_estado = st.selectbox(
-                        "🔎 Filtrar Vista por Estado de Carga:",
-                        options=["Todos los Registros", "🔴 Faltan Cargar (Sin Horas Cargadas)", "⚠️ Discrepancias de Horas", "🟢 Carga Completa / Correcta", "🚫 Sector Excluido"]
-                    )
+                    # --- CONTROLES DE FILTRADO NATIVO Y BÚSQUEDA ---
+                    col_f_txt, col_f_sel = st.columns([1.5, 1])
+                    with col_f_txt:
+                        texto_busqueda = st.text_input("🔍 Buscar por Nombre o Legajo:", value="", placeholder="Ej: Kriger, 50028177...").strip().lower()
+                    with col_f_sel:
+                        filtro_estado = st.selectbox(
+                            "🔎 Filtrar por Estado de Carga:",
+                            options=["Todos los Registros", "🔴 Faltan Cargar (Sin Horas Cargadas)", "⚠️ Discrepancias de Horas", "🟢 Carga Completa / Correcta", "🚫 Sector Excluido"]
+                        )
 
+                    df_mostrar = df_resultado_det.copy()
+
+                    # Aplicar filtro de búsqueda general de texto
+                    if texto_busqueda:
+                        df_mostrar = df_mostrar[
+                            df_mostrar["Nombre y Apellido"].astype(str).str.lower().str.contains(texto_busqueda) |
+                            df_mostrar["Legajo"].astype(str).str.lower().str.contains(texto_busqueda)
+                        ]
+
+                    # Aplicar filtro por estado de validación
                     if filtro_estado != "Todos los Registros":
                         tag_emoji = filtro_estado.split()[0]
-                        df_mostrar = df_resultado_det[df_resultado_det["Estado de Validación"].str.contains(tag_emoji, na=False)]
-                    else:
-                        df_mostrar = df_resultado_det
+                        df_mostrar = df_mostrar[df_mostrar["Estado de Validación"].str.contains(tag_emoji, na=False)]
 
                     st_styled_det = df_mostrar.style
                     def func_color_det(val):
@@ -1098,7 +1120,14 @@ with t_detalle:
                     else:
                         st_styled_det = st_styled_det.applymap(func_color_det, subset=["Estado de Validación"])
 
-                    st.dataframe(st_styled_det, use_container_width=True)
+                    st.dataframe(
+                        st_styled_det,
+                        column_config={
+                            "Horas Reloj Fichadas": st.column_config.NumberColumn(format="%.1f hs"),
+                            "Horas Cargadas en Planilla": st.column_config.NumberColumn(format="%.1f hs")
+                        },
+                        use_container_width=True
+                    )
 
                     out_det = io.BytesIO()
                     with pd.ExcelWriter(out_det, engine="openpyxl") as writer:
