@@ -104,45 +104,93 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     fh.seek(0)
     return fh
 
-def cargar_dataframe_fichada(fh_bytes):
-    """Carga de forma flexible la solapa Hoja2 o en su defecto la primera solapa disponible sin header previo"""
-    xl = pd.ExcelFile(fh_bytes)
-    nombre_hoja = "Hoja2" if "Hoja2" in xl.sheet_names else (xl.sheet_names[1] if len(xl.sheet_names) > 1 else xl.sheet_names[0])
-    return pd.read_excel(fh_bytes, sheet_name=nombre_hoja, header=None)
-
-# 🚀 ESTRUCTURA FORZADA Y ROBUSTA PARA LEER EL FORMATO DEL DÍA 9
+# 🛡️ CAPA 2: Si no detecta la columna, la ubica por proximidad al Nombre
 def detectar_estructura_fichada(df_raw):
-    """Fuerza los índices exactos de columnas (Legajo en C, Nombre en D, Ingreso en E, Egreso en F)"""
-    header_row = 2
+    header_row = 1 
+    col_leg, col_nom, col_ing, col_egr, col_nov = -1, -1, -1, -1, -1
+
     for idx in range(min(15, len(df_raw))):
         row_str = " ".join([str(val).upper() for val in df_raw.iloc[idx].values if pd.notna(val)])
-        if "APELLIDO" in row_str or "NOMBRE" in row_str or "HS.ING" in row_str:
+        if "APELLIDO" in row_str or "NOMBRE" in row_str:
             header_row = idx
             break
 
-    # Col C (2) = Legajo, Col D (3) = Nombre, Col E (4) = hs.ing., Col F (5) = hs. Sal., Col M (12) = Obra/Novedad
-    return header_row + 1, 2, 3, 4, 5, 12
+    if header_row < len(df_raw):
+        headers = [str(v).upper().strip() for v in df_raw.iloc[header_row].values]
+        for idx, val in enumerate(headers):
+            if "LEGAJO" in val or "LEG" in val: col_leg = idx
+            elif "NOMBRE" in val or "APELLIDO" in val: col_nom = idx
+            elif "ING" in val or "ENTRADA" in val or "1RA" in val: col_ing = idx
+            elif "SAL" in val or "EGRESO" in val or "ULTIMA" in val: col_egr = idx
+            elif "OBRA" in val or "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
 
-def convertir_a_horas_decimal(val):
-    """Convierte horas numéricas enteras (ej. 6, 18), strings o 'X' a horas decimales"""
-    if pd.isna(val) or val == "" or str(val).strip().upper() in ["--:--", "NAN", "NONE", "NULL", "X"]:
-        return None
-    try:
-        if isinstance(val, datetime.time):
-            return val.hour + val.minute / 60.0
-        if isinstance(val, (pd.Timestamp, datetime.datetime)):
-            return val.hour + val.minute / 60.0
+    # Mapeo posicional infalible
+    if col_nom != -1:
+        if col_leg == -1: col_leg = max(0, col_nom - 1)
+        if col_ing == -1: col_ing = col_nom + 1
+        if col_egr == -1: col_egr = col_ing + 1
+    
+    if col_leg == -1: col_leg = 2
+    if col_nom == -1: col_nom = 3
+    if col_ing == -1: col_ing = 4
+    if col_egr == -1: col_egr = 5
+    if col_nov == -1: col_nov = 12
+
+    return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
+
+# 🛡️ CAPA 1 y 4 MULTI-HOJA: Busca inteligentemente TODAS las solapas con datos y las une
+def cargar_dataframe_fichada(fh_bytes):
+    xl = pd.ExcelFile(fh_bytes)
+    hojas_validas = []
+    
+    # 1. Escanear TODAS las hojas buscando las que tienen datos de personal
+    for sheet in xl.sheet_names:
+        df_temp = pd.read_excel(fh_bytes, sheet_name=sheet, nrows=15, header=None)
+        if df_temp.empty: continue
+        texto_hoja = " ".join([str(val).upper() for val in df_temp.values.flatten() if pd.notna(val)])
+        if any(k in texto_hoja for k in ["APELLIDO", "LEGAJO", "HS.ING", "INGRESO"]):
+            hojas_validas.append(sheet)
+    
+    # Fallback por si la detección falla
+    if not hojas_validas:
+        hojas_validas = ["Hoja2"] if "Hoja2" in xl.sheet_names else [xl.sheet_names[0]]
         
-        s_val = str(val).strip().replace(",", ".")
-        if ":" in s_val:
-            parts = s_val.split(":")
-            h = float(parts[0])
-            m = float(parts[1]) if len(parts) > 1 else 0.0
-            return h + m / 60.0
+    dfs = []
+    for idx, sheet in enumerate(hojas_validas):
+        df_s = pd.read_excel(fh_bytes, sheet_name=sheet, header=None)
+        if df_s.empty: continue
+        
+        if idx > 0:
+            # Si es la Hoja 3, 4, etc... le cortamos la cabecera para que los datos 
+            # se peguen perfectamente abajo de la primera hoja sin interrumpir la lista.
+            start_r, _, _, _, _, _ = detectar_estructura_fichada(df_s)
+            df_s = df_s.iloc[start_r:]
             
-        f_val = float(s_val)
-        return f_val
-    except ValueError:
+        dfs.append(df_s)
+        
+    # Unimos todas las hojas en un solo dataframe gigante
+    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
+# 🛡️ CAPA 3: Extracción de números puros mediante Regex
+def convertir_a_horas_decimal(val):
+    if pd.isna(val) or val == "": return None
+    s_val = str(val).upper().replace("\xa0", " ").strip()
+    
+    if s_val in ["--:--", "NAN", "NONE", "NULL", "X", "-"]: return None
+    try:
+        if isinstance(val, datetime.time): return val.hour + val.minute / 60.0
+        if isinstance(val, (pd.Timestamp, datetime.datetime)): return val.hour + val.minute / 60.0
+        
+        s_val = s_val.replace(",", ".")
+        match = re.search(r"(\d+[:\.]?\d*)", s_val)
+        if not match: return None
+        
+        clean_val = match.group(1)
+        if ":" in clean_val:
+            parts = clean_val.split(":")
+            return float(parts[0]) + (float(parts[1]) / 60.0 if len(parts) > 1 and parts[1] else 0.0)
+        return float(clean_val)
+    except Exception:
         return None
 
 def obtener_notificaciones_drive(file_id, mime_type=None):
@@ -413,7 +461,7 @@ with t_reporte:
         if st.session_state["mostrar_reporte"]:
             try:
                 af_selected_id = mapa_archivos.get(af_selected)
-                with st.spinner("Descargando fichada desde Drive..."):
+                with st.spinner("Descargando fichadas desde Drive (Múltiples hojas)..."):
                     fh_fichada = descargar_archivo_drive(af_selected_id)
 
                 d_pestana, m_pestana = obtener_dia_mes(nh)
@@ -562,7 +610,9 @@ with t_reporte:
                                     with st.spinner("Actualizando Excel en Google Drive..."):
                                         fh_fichada.seek(0)
                                         wb_fichada = load_workbook(fh_fichada)
-                                        ws_fichada = wb_fichada["Hoja2"] if "Hoja2" in wb_fichada.sheetnames else wb_fichada.active
+                                        
+                                        # NUEVO: Busca por TODAS las hojas del excel original
+                                        hojas_fichada = wb_fichada.sheetnames
                                         
                                         col_leg_ws = c_leg + 1
                                         col_nom_ws = c_nom + 1
@@ -573,15 +623,24 @@ with t_reporte:
                                             nom_buscar = str(row_edit["Nombre y Apellido (Fichada)"]).strip()
                                             nov_asignar = str(row_edit["Asignar Novedad"]).strip()
 
-                                            for r_idx in range(1, ws_fichada.max_row + 1):
-                                                cell_val = ws_fichada.cell(row=r_idx, column=col_leg_ws).value
-                                                cell_name = str(ws_fichada.cell(row=r_idx, column=col_nom_ws).value or "").strip()
-                                                cell_leg = limpiar_legajo(cell_val)
-                                                match_found = (cell_leg == leg_buscar) if (cell_leg is not None and leg_buscar is not None) else (nom_buscar and nom_buscar.lower() in cell_name.lower())
+                                            actualizado = False
+                                            for h_name in hojas_fichada:
+                                                if actualizado: break
+                                                ws_temp = wb_fichada[h_name]
+                                                for r_idx in range(1, ws_temp.max_row + 1):
+                                                    cell_val = ws_temp.cell(row=r_idx, column=col_leg_ws).value
+                                                    cell_name = str(ws_temp.cell(row=r_idx, column=col_nom_ws).value or "").strip()
+                                                    cell_leg = limpiar_legajo(cell_val)
+                                                    
+                                                    if not cell_name and cell_leg is None:
+                                                        continue
 
-                                                if match_found:
-                                                    ws_fichada.cell(row=r_idx, column=col_nov_ws).value = nov_asignar
-                                                    break
+                                                    match_found = (cell_leg == leg_buscar) if (cell_leg is not None and leg_buscar is not None) else (nom_buscar and nom_buscar.lower() in cell_name.lower())
+
+                                                    if match_found:
+                                                        ws_temp.cell(row=r_idx, column=col_nov_ws).value = nov_asignar
+                                                        actualizado = True
+                                                        break
 
                                         out_bytes = io.BytesIO()
                                         wb_fichada.save(out_bytes)
