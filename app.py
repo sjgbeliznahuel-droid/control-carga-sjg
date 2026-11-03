@@ -30,9 +30,8 @@ SHEET_ID = "1gGkGjO-ZX7auYdlKAuI9rLEN_KoVah3vdnz7WofcHq0"
 URL_DESCARGA_SHEET = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxZOKYHQHzLR-gZionm3Ub1z8Rlrz5l6AtR1D8gLKKIeAqhSGMf62vMfsa4F2s1gcweFA/exec"
 DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
-NOTIF_FOLDER_ID = "1GJGTwWRwmrWT-Zgkp4nQcWmm3kk-eR8y"  # Carpeta de Notificaciones Finales
+NOTIF_FOLDER_ID = "1GJGTwWRwmrWT-Zgkp4nQcWmm3kk-eR8y"
 
-# --- CONEXIÓN A GOOGLE DRIVE ---
 @st.cache_resource
 def conectar_drive():
     credenciales_dict = json.loads(st.secrets["credenciales"])
@@ -44,7 +43,6 @@ def conectar_drive():
 drive_service = conectar_drive()
 
 def normalizar_ot(val):
-    """Convierte cualquier valor de OT a un string numérico limpio sin decimales ni espacios"""
     if pd.isna(val): return ""
     s = str(val).strip()
     if not s or s.lower() in ["nan", "none", "null"]: return ""
@@ -63,14 +61,10 @@ def obtener_archivos_drive():
     return resultados.get('files', [])
 
 def obtener_archivos_notif_drive():
-    """Lista todos los archivos (Excel o Google Sheets) de la carpeta de notificaciones en Drive"""
     try:
         query = f"'{NOTIF_FOLDER_ID}' in parents and trashed=false"
         resultados = drive_service.files().list(
-            q=query, 
-            orderBy="modifiedTime desc", 
-            pageSize=1000, 
-            fields="files(id, name, mimeType)"
+            q=query, orderBy="modifiedTime desc", pageSize=1000, fields="files(id, name, mimeType)"
         ).execute()
         
         archivos = resultados.get('files', [])
@@ -80,11 +74,9 @@ def obtener_archivos_notif_drive():
             mime = f.get('mimeType', '')
             if nombre.lower().endswith(('.xlsx', '.xltx', '.csv')) or mime == 'application/vnd.google-apps.spreadsheet':
                 archivos_validos.append(f)
-                
         return archivos_validos
     except Exception as e:
         st.error(f"⚠️ Error de acceso a la carpeta de Drive: {e}")
-        st.info("💡 Asegurate de haber compartido la carpeta con el mail de tu cuenta de servicio.")
         return []
 
 def descargar_archivo_drive(file_id):
@@ -98,7 +90,6 @@ def descargar_archivo_drive(file_id):
     return fh
 
 def descargar_archivo_notif_drive(file_id, mime_type):
-    """Descarga tanto archivos Excel físicos como Hojas de Cálculo nativas de Google"""
     if mime_type == 'application/vnd.google-apps.spreadsheet':
         request = drive_service.files().export_media(fileId=file_id, mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     else:
@@ -112,10 +103,18 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     fh.seek(0)
     return fh
 
+def cargar_dataframe_fichada(fh_bytes):
+    """Carga de forma flexible la solapa Hoja2 o en su defecto la primera solapa disponible"""
+    xl = pd.ExcelFile(fh_bytes)
+    if "Hoja2" in xl.sheet_names:
+        return xl.parse("Hoja2")
+    elif len(xl.sheet_names) > 1:
+        return xl.parse(xl.sheet_names[1])
+    else:
+        return xl.parse(xl.sheet_names[0])
+
 def obtener_notificaciones_drive(file_id, mime_type=None):
-    """Lee la planilla de notificaciones seleccionada detectando automáticamente columnas por patrón de contenido"""
-    if not file_id:
-        return {}, {}
+    if not file_id: return {}, {}
     try:
         fh = descargar_archivo_notif_drive(file_id, mime_type)
         df_raw = pd.read_excel(fh, header=None)
@@ -144,36 +143,10 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                 if re.search(r'\b(OT|ORDEN)\b', c_str):
                     ot_col = c
                     break
-        if not ot_col:
-            for c in df_notif.columns:
-                sample = [normalizar_ot(v) for v in df_notif[c].dropna().head(20)]
-                if any(len(v) >= 7 and v.isdigit() for v in sample):
-                    ot_col = c
-                    break
 
-        sol_col = None
-        for c in df_notif.columns:
-            c_str = str(c).strip().upper()
-            if any(k in c_str for k in ["SOLICITUD", "SOLIC", "N° SOL", "NUMERO SOL", "NRO SOL"]):
-                sol_col = c
-                break
-
-        est_col = None
-        for c in df_notif.columns:
-            c_str = str(c).strip().upper()
-            if any(k in c_str for k in ["ESTADO", "STATUS"]):
-                est_col = c
-                break
-
-        fecha_col = None
-        if len(df_notif.columns) > 3:
-            fecha_col = df_notif.columns[3]
-        else:
-            for c in df_notif.columns:
-                c_str = str(c).strip().upper()
-                if any(k in c_str for k in ["FECHA", "NOTIF"]):
-                    fecha_col = c
-                    break
+        sol_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["SOLICITUD", "SOLIC", "N° SOL"])), None)
+        est_col = next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["ESTADO", "STATUS"])), None)
+        fecha_col = df_notif.columns[3] if len(df_notif.columns) > 3 else next((c for c in df_notif.columns if any(k in str(c).upper() for k in ["FECHA", "NOTIF"])), None)
 
         mapa_notif_acumulado = {}
         if ot_col:
@@ -192,17 +165,10 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                     else:
                         str_vf = str(v_f).strip()
                         match_dt = re.search(r'(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})', str_vf)
-                        if match_dt:
-                            val_fecha = match_dt.group(1)
-                        else:
-                            val_fecha = str_vf.split()[0] if " " in str_vf else str_vf
+                        val_fecha = match_dt.group(1) if match_dt else (str_vf.split()[0] if " " in str_vf else str_vf)
 
                 if ot_key not in mapa_notif_acumulado:
-                    mapa_notif_acumulado[ot_key] = {
-                        "solicitudes": [],
-                        "notificaciones": [],
-                        "estados": []
-                    }
+                    mapa_notif_acumulado[ot_key] = {"solicitudes": [], "notificaciones": [], "estados": []}
 
                 if val_sol and val_sol not in mapa_notif_acumulado[ot_key]["solicitudes"]:
                     mapa_notif_acumulado[ot_key]["solicitudes"].append(val_sol)
@@ -211,39 +177,30 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                 if val_est and val_est not in mapa_notif_acumulado[ot_key]["estados"]:
                     mapa_notif_acumulado[ot_key]["estados"].append(val_est)
 
-        mapa_notif_final = {}
-        for k_ot, v_data in mapa_notif_acumulado.items():
-            mapa_notif_final[k_ot] = {
+        mapa_notif_final = {
+            k_ot: {
                 "solicitud": " - ".join(v_data["solicitudes"]),
                 "notificacion": " - ".join(v_data["notificaciones"]),
                 "estado": " - ".join(v_data["estados"])
-            }
-
-        diag = {
-            "ot_col": ot_col,
-            "sol_col": sol_col,
-            "est_col": est_col,
-            "fecha_col": fecha_col,
-            "total_keys": len(mapa_notif_final)
+            } for k_ot, v_data in mapa_notif_acumulado.items()
         }
 
+        diag = {"ot_col": ot_col, "sol_col": sol_col, "est_col": est_col, "fecha_col": fecha_col, "total_keys": len(mapa_notif_final)}
         return mapa_notif_final, diag
     except Exception as e:
         st.error(f"Error al procesar la planilla de notificaciones: {e}")
         return {}, {}
 
-# --- LOGO VECTORIAL ---
 SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
 
 col_logo, col_titulo, col_refrescar = st.columns([1.2, 2.3, 0.9])
-with col_logo:
-    st.markdown(SJG_LOGO_SVG, unsafe_allow_html=True)
+with col_logo: st.markdown(SJG_LOGO_SVG, unsafe_allow_html=True)
 with col_titulo:
     st.title("Sistema de Control y Validación de Personal")
     st.caption("Conciliación automatizada de Partes de Carga vs. Fichadas en Puerta (Cloud - En Vivo)")
 with col_refrescar:
     st.write("")
-    if st.button("🔄 Refrescar App", help="Limpia la caché y fuerza la recarga de datos sin cerrar la aplicación"):
+    if st.button("🔄 Refrescar App", help="Limpia la caché y fuerza la recarga de datos"):
         st.cache_data.clear()
         st.session_state["mostrar_reporte"] = False
         st.session_state["cruce_cierre_ejecutado"] = False
@@ -326,13 +283,10 @@ def calcular_horas_fichada(ing, sal):
     except Exception: return 0.0
 
 def formatear_horario(val):
-    """Convierte horas decimales o texto a formato de reloj HH:MM limpio"""
     if pd.isna(val) or val == "" or str(val).strip().lower() in ["nan", "none", "--:--"]:
         return "--:--"
     try:
-        if isinstance(val, datetime.time):
-            return val.strftime("%H:%M")
-        if isinstance(val, (pd.Timestamp, datetime.datetime)):
+        if isinstance(val, (datetime.time, pd.Timestamp, datetime.datetime)):
             return val.strftime("%H:%M")
         f_val = float(str(val).replace(",", "."))
         horas = int(f_val)
@@ -363,7 +317,7 @@ with t_carga:
         st.subheader("Base de Fichadas Guardadas (Drive)")
         try:
             archivos_drive = obtener_archivos_drive()
-            archivos_guardados = [f['name'] for f in archivos_drive if f['name'].endswith(('.xlsx', '.xltx'))]
+            archivos_guardados = [f['name'] for f in archivos_drive if f['name'].lower().endswith(('.xlsx', '.xltx'))]
             mapa_archivos = {f['name']: f['id'] for f in archivos_drive}
             
             if not archivos_guardados:
@@ -372,7 +326,8 @@ with t_carga:
             else:
                 fichadas_por_mes = {}
                 for f in archivos_guardados:
-                    match = re.search(r"Fichada_(\d{1,2})-(\d{1,2})", f)
+                    # Regex ultra-flexible para capturar nombres tipo Fichada_09-10, fichada 9-10, FICHADA-9-10
+                    match = re.search(r"fichada[_\s]*(\d{1,2})[-/\.](\d{1,2})", f, re.IGNORECASE)
                     if match:
                         dia, mes = int(match.group(1)), int(match.group(2))
                         if mes not in fichadas_por_mes: fichadas_por_mes[mes] = {}
@@ -439,7 +394,7 @@ with t_reporte:
                     fh_fichada = descargar_archivo_drive(af_selected_id)
 
                 d_pestana, m_pestana = obtener_dia_mes(nh)
-                dff_raw = pd.read_excel(fh_fichada, sheet_name="Hoja2", header=None)
+                dff_raw = cargar_dataframe_fichada(fh_fichada)
                 fh_fichada.seek(0) 
                 
                 d_fichada, m_fichada = obtener_dia_mes(af_selected)
@@ -468,7 +423,7 @@ with t_reporte:
                 if legajo_col is None and len(dfc.columns) > 2: legajo_col = dfc.columns[2]
                 if obra_col is None: obra_col = dfc.columns[12] if len(dfc.columns) > 12 else dfc.columns[-1]
 
-                dff = pd.read_excel(fh_fichada, sheet_name="Hoja2")
+                dff = dff_raw.copy()
 
                 keywords_novedades = {
                     "COMPENSATORIO": "Compensatorio", "COMPENSATORIA": "Compensatorio",
@@ -578,7 +533,7 @@ with t_reporte:
                                     with st.spinner("Actualizando Excel en Google Drive..."):
                                         fh_fichada.seek(0)
                                         wb_fichada = load_workbook(fh_fichada)
-                                        ws_fichada = wb_fichada["Hoja2"]
+                                        ws_fichada = wb_fichada["Hoja2"] if "Hoja2" in wb_fichada.sheetnames else wb_fichada.active
 
                                         for index, row_edit in cambios.iterrows():
                                             leg_buscar = limpiar_legajo(row_edit["LEGAJO"])
@@ -745,23 +700,15 @@ with t_cierre:
                                 if not ot_str: continue
 
                                 sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
-                                
-                                if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan":
-                                    fecha_val = str(row_r[fecha_col]).strip()
-                                else:
-                                    fecha_val = s_name
-
+                                fecha_val = str(row_r[fecha_col]).strip() if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan" else s_name
                                 notif_val = str(row_r[notif_col]).strip() if notif_col and pd.notna(row_r[notif_col]) and str(row_r[notif_col]).lower() != "nan" else ""
                                 est_val = ""
 
                                 if ot_str in mapa_notif_drive:
                                     data_d = mapa_notif_drive[ot_str]
-                                    if not sol_val and data_d.get("solicitud"):
-                                        sol_val = data_d["solicitud"]
-                                    if not notif_val and data_d.get("notificacion"):
-                                        notif_val = data_d["notificacion"]
-                                    if data_d.get("estado"):
-                                        est_val = data_d["estado"]
+                                    if not sol_val and data_d.get("solicitud"): sol_val = data_d["solicitud"]
+                                    if not notif_val and data_d.get("notificacion"): notif_val = data_d["notificacion"]
+                                    if data_d.get("estado"): est_val = data_d["estado"]
 
                                 sector_val = str(row_r[sector_col]).strip() if sector_col and pd.notna(row_r[sector_col]) and str(row_r[sector_col]).lower() != "nan" else ""
                                 resp_val = str(row_r[resp_col]).strip() if resp_col and pd.notna(row_r[resp_col]) and str(row_r[resp_col]).lower() != "nan" else ""
@@ -794,7 +741,6 @@ with t_cierre:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
                     
                     kpi_container = st.container()
-                    
                     st.divider()
                     st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
                     
@@ -817,15 +763,11 @@ with t_cierre:
 
                     def evaluar_estado_ot(row):
                         est = str(row["Estado Solicitud"]).strip().upper()
-                        if any(k in est for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
-                            return "RECHAZADA"
-                        if any(k in est for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
-                            return "PENDIENTE"
-                        if any(k in est for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]):
-                            return "APROBADA"
+                        if any(k in est for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]): return "RECHAZADA"
+                        if any(k in est for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]): return "PENDIENTE"
+                        if any(k in est for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]): return "APROBADA"
                         f_notif = str(row["Fecha notificación final"]).strip()
-                        if f_notif and f_notif.lower() not in ["nan", "none", "", "-"]:
-                            return "APROBADA"
+                        if f_notif and f_notif.lower() not in ["nan", "none", "", "-"]: return "APROBADA"
                         return "PENDIENTE"
 
                     estados_eval = edited_ots_df.apply(evaluar_estado_ot, axis=1)
@@ -862,8 +804,7 @@ with t_cierre:
                                 }
                                 with st.spinner("Sincronizando con Google Sheets..."):
                                     res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
-                                if res.status_code == 200:
-                                    st.success("🟢 ¡Sincronizado con éxito!")
+                                if res.status_code == 200: st.success("🟢 ¡Sincronizado con éxito!")
                                 else: st.error(f"Error {res.status_code}")
                             except Exception as e: st.error(f"Error al enviar datos: {e}")
 
@@ -872,7 +813,6 @@ with t_cierre:
                         with pd.ExcelWriter(out_cierre, engine="openpyxl") as writer:
                             edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
                         out_cierre.seek(0)
-
                         st.download_button(
                             label="📥 Descargar Cierre de OTs (Excel)",
                             data=out_cierre,
@@ -893,8 +833,7 @@ with t_quincena:
 
         if dias_ordenados_q:
             col_q1, col_q2, col_q3 = st.columns([1, 1, 1.2])
-            with col_q1:
-                desde_dia_q = st.selectbox("📅 Fecha Desde:", options=dias_ordenados_q, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map_q[d]})", index=0, key="desde_q")
+            with col_q1: desde_dia_q = st.selectbox("📅 Fecha Desde:", options=dias_ordenados_q, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map_q[d]})", index=0, key="desde_q")
             with col_q2:
                 dias_hasta_opciones_q = [d for d in dias_ordenados_q if d >= desde_dia_q]
                 hasta_dia_q = st.selectbox("📅 Fecha Hasta:", options=dias_hasta_opciones_q, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map_q[d]})", index=len(dias_hasta_opciones_q)-1 if dias_hasta_opciones_q else 0, key="hasta_q")
@@ -943,16 +882,16 @@ with t_quincena:
                         fichadas_horas_dict = {}
                         with st.spinner("Analizando fichadas en Google Drive..."):
                             archivos_drive = obtener_archivos_drive()
-                            mapa_archivos_q = {f['name']: f['id'] for f in archivos_drive if f['name'].endswith(('.xlsx', '.xltx'))}
+                            mapa_archivos_q = {f['name']: f['id'] for f in archivos_drive if f['name'].lower().endswith(('.xlsx', '.xltx'))}
                             
                             for f_loc, f_id in mapa_archivos_q.items():
-                                match_f = re.search(r"Fichada_(\d{1,2})-(\d{1,2})", f_loc)
+                                match_f = re.search(r"fichada[_\s]*(\d{1,2})[-/\.](\d{1,2})", f_loc, re.IGNORECASE)
                                 if match_f:
                                     d_f = int(match_f.group(1))
                                     if d_f < desde_dia_q or d_f > hasta_dia_q: continue
                                     try:
                                         fh_loc = descargar_archivo_drive(f_id)
-                                        dff_loc = pd.read_excel(fh_loc, sheet_name="Hoja2")
+                                        dff_loc = cargar_dataframe_fichada(fh_loc)
                                         for idx_fl in range(2, len(dff_loc)):
                                             l_f_clean = limpiar_legajo(dff_loc.iloc[idx_fl, 2])
                                             if l_f_clean is not None:
@@ -1002,7 +941,7 @@ with t_detalle:
                 af_selected_id = mapa_archivos.get(af_selected)
                 with st.spinner("Leyendo registros de fichadas y horarios desde Drive..."):
                     fh_fichada_det = descargar_archivo_drive(af_selected_id)
-                    dff_det = pd.read_excel(fh_fichada_det, sheet_name="Hoja2")
+                    dff_det = cargar_dataframe_fichada(fh_fichada_det)
 
                 with st.spinner("Procesando datos de la planilla de carga..."):
                     dfc_raw_d = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, header=None)
@@ -1082,7 +1021,6 @@ with t_detalle:
 
                     st.divider()
 
-                    # --- CONTROLES DE FILTRADO NATIVO Y BÚSQUEDA ---
                     col_f_txt, col_f_sel = st.columns([1.5, 1])
                     with col_f_txt:
                         texto_busqueda = st.text_input("🔍 Buscar por Nombre o Legajo:", value="", placeholder="Ej: Kriger, 50028177...").strip().lower()
@@ -1094,14 +1032,12 @@ with t_detalle:
 
                     df_mostrar = df_resultado_det.copy()
 
-                    # Aplicar filtro de búsqueda general de texto
                     if texto_busqueda:
                         df_mostrar = df_mostrar[
                             df_mostrar["Nombre y Apellido"].astype(str).str.lower().str.contains(texto_busqueda) |
                             df_mostrar["Legajo"].astype(str).str.lower().str.contains(texto_busqueda)
                         ]
 
-                    # Aplicar filtro por estado de validación
                     if filtro_estado != "Todos los Registros":
                         tag_emoji = filtro_estado.split()[0]
                         df_mostrar = df_mostrar[df_mostrar["Estado de Validación"].str.contains(tag_emoji, na=False)]
