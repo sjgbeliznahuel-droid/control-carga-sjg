@@ -110,36 +110,21 @@ def cargar_dataframe_fichada(fh_bytes):
     nombre_hoja = "Hoja2" if "Hoja2" in xl.sheet_names else (xl.sheet_names[1] if len(xl.sheet_names) > 1 else xl.sheet_names[0])
     return pd.read_excel(fh_bytes, sheet_name=nombre_hoja, header=None)
 
-# 🚀 MOTOR ACTUALIZADO: Detecta dinámicamente columnas como 'hs.ing.' y 'hs. Sal.'
+# 🚀 ESTRUCTURA FORZADA Y ROBUSTA PARA LEER EL FORMATO DEL DÍA 9
 def detectar_estructura_fichada(df_raw):
-    """Detecta dinámicamente la fila de inicio y las columnas clave del archivo de fichada."""
-    header_row = 1 
-    col_leg = 2    
-    col_nom = 3    
-    col_ing = 4    
-    col_egr = 5    
-    col_nov = 12   
-
+    """Fuerza los índices exactos de columnas (Legajo en C, Nombre en D, Ingreso en E, Egreso en F)"""
+    header_row = 2
     for idx in range(min(15, len(df_raw))):
         row_str = " ".join([str(val).upper() for val in df_raw.iloc[idx].values if pd.notna(val)])
-        if any(k in row_str for k in ["LEGAJO", "APELLIDO", "NOMBRE", "HS.ING"]):
+        if "APELLIDO" in row_str or "NOMBRE" in row_str or "HS.ING" in row_str:
             header_row = idx
             break
 
-    if header_row < len(df_raw):
-        headers = [str(v).upper() for v in df_raw.iloc[header_row].values]
-        for idx, val in enumerate(headers):
-            if "LEGAJO" in val or "LEG" in val: col_leg = idx
-            elif "NOMBRE" in val or "APELLIDO" in val: col_nom = idx
-            elif any(k in val for k in ["INGRESO", "ENTRADA", "1RA", "HS.ING"]): col_ing = idx
-            elif any(k in val for k in ["EGRESO", "SALIDA", "ULTIMA", "HS. SAL"]): col_egr = idx
-            elif "OBRA" in val or "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
+    # Col C (2) = Legajo, Col D (3) = Nombre, Col E (4) = hs.ing., Col F (5) = hs. Sal., Col M (12) = Obra/Novedad
+    return header_row + 1, 2, 3, 4, 5, 12
 
-    return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
-
-# 🚀 CONVERSOR ACTUALIZADO: Soporta enteros (6, 18), formato hora y marcas de "X"
 def convertir_a_horas_decimal(val):
-    """Convierte cualquier representación de hora a horas decimales (soporta 'X', enteros, etc.)"""
+    """Convierte horas numéricas enteras (ej. 6, 18), strings o 'X' a horas decimales"""
     if pd.isna(val) or val == "" or str(val).strip().upper() in ["--:--", "NAN", "NONE", "NULL", "X"]:
         return None
     try:
