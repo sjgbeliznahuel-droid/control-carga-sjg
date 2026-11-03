@@ -331,7 +331,7 @@ def calcular_horas_fichada(ing, sal):
     except Exception: return 0.0
 
 t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena = st.tabs([
-    "📥 Carga de Fichadas/RRHH", "📂 1. Carga", "⚙️ 2. Reglas", "📊 3. Reporte", "📋 Cierre de Período", "⏱️ 4. Horas y Quincenas"
+    "📥 Carga de Fichadas/RRHH", "📂 1. Carga", "⚙️ 2. Reglas", "📊 3. Reporte", "📋 Cierre de Período", "⏱️ 4. Horas y Período Personalizado"
 ])
 
 with t_rrhh:
@@ -873,89 +873,99 @@ with t_cierre:
         else: st.info("No se detectaron días cargados en la planilla.")
     else: st.info("Conectando con Google Sheets...")
 
+# --- PESTAÑA: ⏱️ RECUENTO Y SELECCIÓN PERSONALIZADA DE HORAS ---
 with t_quincena:
-    st.header("⏱️ Recuento y Validación Quincenal de Horas")
+    st.header("⏱️ Recuento y Selección Personalizada de Horas")
     if carga_bytes:
-        col_q1, col_q2 = st.columns([2, 1])
-        with col_q1: quincena_sel = st.radio("Seleccionar Período:", options=["1ª Quincena (Días 1 al 15)", "2ª Quincena (Días 16 al 31)", "Todo el Mes"], horizontal=True)
-        with col_q2: btn_calc_q = st.button("📊 Calcular Resumen Quincenal", type="primary")
+        xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
+        dias_disponibles_map_q = {int(m.group(1)): s for s in xl_carga.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
+        dias_ordenados_q = sorted(dias_disponibles_map_q.keys())
 
-        if btn_calc_q or st.session_state.get("ver_quincena", False):
-            st.session_state["ver_quincena"] = True
-            try:
-                xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
-                registros_quincena = []
+        if dias_ordenados_q:
+            col_q1, col_q2, col_q3 = st.columns([1, 1, 1.2])
+            with col_q1:
+                desde_dia_q = st.selectbox("📅 Fecha Desde:", options=dias_ordenados_q, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map_q[d]})", index=0, key="desde_q")
+            with col_q2:
+                dias_hasta_opciones_q = [d for d in dias_ordenados_q if d >= desde_dia_q]
+                hasta_dia_q = st.selectbox("📅 Fecha Hasta:", options=dias_hasta_opciones_q, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map_q[d]})", index=len(dias_hasta_opciones_q)-1 if dias_hasta_opciones_q else 0, key="hasta_q")
+            with col_q3:
+                st.write("")
+                btn_calc_q = st.button("📊 Calcular Resumen de Horas", type="primary")
 
-                for sheet in xl_carga.sheet_names:
-                    match = re.search(r"(\d{1,2})[-/\.](\d{1,2})", sheet)
-                    if not match: continue
-                    dia, mes = int(match.group(1)), int(match.group(2))
-                    if quincena_sel == "1ª Quincena (Días 1 al 15)" and dia > 15: continue
-                    elif quincena_sel == "2ª Quincena (Días 16 al 31)" and dia <= 15: continue
+            if btn_calc_q or st.session_state.get("ver_quincena", False):
+                st.session_state["ver_quincena"] = True
+                try:
+                    registros_quincena = []
 
-                    dfc_raw = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=sheet, header=None)
-                    header_row_idx = next((idx for idx, row in dfc_raw.iterrows() if any(k in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) for k in ["LEGAJO", "OBRA", "APELLIDO"])), 0)
-                    dfc_q = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=sheet, skiprows=header_row_idx)
+                    for sheet in xl_carga.sheet_names:
+                        match = re.search(r"(\d{1,2})[-/\.](\d{1,2})", sheet)
+                        if not match: continue
+                        dia, mes = int(match.group(1)), int(match.group(2))
+                        if dia < desde_dia_q or dia > hasta_dia_q: continue
 
-                    legajo_col = next((c for c in dfc_q.columns if "LEGAJO" in str(c).upper()), None)
-                    nombre_col = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), None)
-                    trabajo_col = next((c for c in dfc_q.columns if "TRABAJO" in str(c).upper()), None)
-                    tipo_col = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["TIPO DE HORA", "TIPO"])), None)
+                        dfc_raw = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=sheet, header=None)
+                        header_row_idx = next((idx for idx, row in dfc_raw.iterrows() if any(k in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) for k in ["LEGAJO", "OBRA", "APELLIDO"])), 0)
+                        dfc_q = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=sheet, skiprows=header_row_idx)
 
-                    if legajo_col and trabajo_col and tipo_col:
-                        for _, row in dfc_q.iterrows():
-                            leg_clean = limpiar_legajo(row[legajo_col])
-                            nom = str(row[nombre_col]).strip() if nombre_col and pd.notna(row[nombre_col]) else (f"Legajo {leg_clean}" if leg_clean else "Sin Nombre")
-                            hs = extraer_horas(row[trabajo_col])
-                            tipo_raw = str(row[tipo_col]).strip().upper() if pd.notna(row[tipo_col]) else "HS. NORMALES"
-                            tipo_cat = "Hs. 50%" if "0.5" in tipo_raw or "50" in tipo_raw else "Hs. 100%" if "1" in tipo_raw or "100" in tipo_raw else "Hs. Normales"
+                        legajo_col = next((c for c in dfc_q.columns if "LEGAJO" in str(c).upper()), None)
+                        nombre_col = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), None)
+                        trabajo_col = next((c for c in dfc_q.columns if "TRABAJO" in str(c).upper()), None)
+                        tipo_col = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["TIPO DE HORA", "TIPO"])), None)
 
-                            if leg_clean is not None or nom != "Sin Nombre":
-                                registros_quincena.append({"Legajo": leg_clean if leg_clean else 0, "Nombre": nom, "Horas": hs, "Tipo": tipo_cat})
+                        if legajo_col and trabajo_col and tipo_col:
+                            for _, row in dfc_q.iterrows():
+                                leg_clean = limpiar_legajo(row[legajo_col])
+                                nom = str(row[nombre_col]).strip() if nombre_col and pd.notna(row[nombre_col]) else (f"Legajo {leg_clean}" if leg_clean else "Sin Nombre")
+                                hs = extraer_horas(row[trabajo_col])
+                                tipo_raw = str(row[tipo_col]).strip().upper() if pd.notna(row[tipo_col]) else "HS. NORMALES"
+                                tipo_cat = "Hs. 50%" if "0.5" in tipo_raw or "50" in tipo_raw else "Hs. 100%" if "1" in tipo_raw or "100" in tipo_raw else "Hs. Normales"
 
-                df_q_all = pd.DataFrame(registros_quincena)
-                if not df_q_all.empty:
-                    piv_q = df_q_all.pivot_table(index=["Legajo", "Nombre"], columns="Tipo", values="Horas", aggfunc="sum", fill_value=0.0).reset_index()
-                    for col_h in ["Hs. Normales", "Hs. 50%", "Hs. 100%"]:
-                        if col_h not in piv_q.columns: piv_q[col_h] = 0.0
-                    piv_q["Total Hs. Cargadas"] = piv_q["Hs. Normales"] + piv_q["Hs. 50%"] + piv_q["Hs. 100%"]
+                                if leg_clean is not None or nom != "Sin Nombre":
+                                    registros_quincena.append({"Legajo": leg_clean if leg_clean else 0, "Nombre": nom, "Horas": hs, "Tipo": tipo_cat})
 
-                    fichadas_horas_dict = {}
-                    with st.spinner("Analizando fichadas en Google Drive..."):
-                        archivos_drive = obtener_archivos_drive()
-                        mapa_archivos_q = {f['name']: f['id'] for f in archivos_drive if f['name'].endswith(('.xlsx', '.xltx'))}
+                    df_q_all = pd.DataFrame(registros_quincena)
+                    if not df_q_all.empty:
+                        piv_q = df_q_all.pivot_table(index=["Legajo", "Nombre"], columns="Tipo", values="Horas", aggfunc="sum", fill_value=0.0).reset_index()
+                        for col_h in ["Hs. Normales", "Hs. 50%", "Hs. 100%"]:
+                            if col_h not in piv_q.columns: piv_q[col_h] = 0.0
+                        piv_q["Total Hs. Cargadas"] = piv_q["Hs. Normales"] + piv_q["Hs. 50%"] + piv_q["Hs. 100%"]
+
+                        fichadas_horas_dict = {}
+                        with st.spinner("Analizando fichadas en Google Drive..."):
+                            archivos_drive = obtener_archivos_drive()
+                            mapa_archivos_q = {f['name']: f['id'] for f in archivos_drive if f['name'].endswith(('.xlsx', '.xltx'))}
+                            
+                            for f_loc, f_id in mapa_archivos_q.items():
+                                match_f = re.search(r"Fichada_(\d{1,2})-(\d{1,2})", f_loc)
+                                if match_f:
+                                    d_f = int(match_f.group(1))
+                                    if d_f < desde_dia_q or d_f > hasta_dia_q: continue
+                                    try:
+                                        fh_loc = descargar_archivo_drive(f_id)
+                                        dff_loc = pd.read_excel(fh_loc, sheet_name="Hoja2")
+                                        for idx_fl in range(2, len(dff_loc)):
+                                            l_f_clean = limpiar_legajo(dff_loc.iloc[idx_fl, 2])
+                                            if l_f_clean is not None:
+                                                fichadas_horas_dict[l_f_clean] = fichadas_horas_dict.get(l_f_clean, 0.0) + calcular_horas_fichada(dff_loc.iloc[idx_fl, 4], dff_loc.iloc[idx_fl, 5])
+                                    except Exception: pass
+
+                        df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
+                        df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
+
+                        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+                        kpi1.metric("📊 Total Hs. Normales", f"{df_q_final['Hs. Normales'].sum():.1f} hs")
+                        kpi2.metric("⚡ Total Hs. 50%", f"{df_q_final['Hs. 50%'].sum():.1f} hs")
+                        kpi3.metric("🔥 Total Hs. 100%", f"{df_q_final['Hs. 100%'].sum():.1f} hs")
+                        kpi4.metric("⏱️ Total Horas Cargadas", f"{df_q_final['Total Hs. Cargadas'].sum():.1f} hs")
                         
-                        for f_loc, f_id in mapa_archivos_q.items():
-                            match_f = re.search(r"Fichada_(\d{1,2})-(\d{1,2})", f_loc)
-                            if match_f:
-                                d_f = int(match_f.group(1))
-                                if quincena_sel == "1ª Quincena (Días 1 al 15)" and d_f > 15: continue
-                                elif quincena_sel == "2ª Quincena (Días 16 al 31)" and d_f <= 15: continue
-                                try:
-                                    fh_loc = descargar_archivo_drive(f_id)
-                                    dff_loc = pd.read_excel(fh_loc, sheet_name="Hoja2")
-                                    for idx_fl in range(2, len(dff_loc)):
-                                        l_f_clean = limpiar_legajo(dff_loc.iloc[idx_fl, 2])
-                                        if l_f_clean is not None:
-                                            fichadas_horas_dict[l_f_clean] = fichadas_horas_dict.get(l_f_clean, 0.0) + calcular_horas_fichada(dff_loc.iloc[idx_fl, 4], dff_loc.iloc[idx_fl, 5])
-                                except Exception: pass
+                        st.divider()
+                        st.dataframe(df_q_final[["Legajo", "Nombre", "Hs. Normales", "Hs. 50%", "Hs. 100%", "Total Hs. Cargadas", "Total Hs. Fichadas (Reloj)", "Diferencia (Cargado vs Fichado)"]].style.applymap(lambda val: "background-color: #FFEB9C; color: #856404;" if val > 0 else "background-color: #F8D7DA; color: #721C24;" if val < 0 else "background-color: #C6EFCE; color: #155724;", subset=["Diferencia (Cargado vs Fichado)"]), use_container_width=True)
 
-                    df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
-                    df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
-
-                    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-                    kpi1.metric("📊 Total Hs. Normales", f"{df_q_final['Hs. Normales'].sum():.1f} hs")
-                    kpi2.metric("⚡ Total Hs. 50%", f"{df_q_final['Hs. 50%'].sum():.1f} hs")
-                    kpi3.metric("🔥 Total Hs. 100%", f"{df_q_final['Hs. 100%'].sum():.1f} hs")
-                    kpi4.metric("⏱️ Total Horas Cargadas", f"{df_q_final['Total Hs. Cargadas'].sum():.1f} hs")
-                    
-                    st.divider()
-                    st.dataframe(df_q_final[["Legajo", "Nombre", "Hs. Normales", "Hs. 50%", "Hs. 100%", "Total Hs. Cargadas", "Total Hs. Fichadas (Reloj)", "Diferencia (Cargado vs Fichado)"]].style.applymap(lambda val: "background-color: #FFEB9C; color: #856404;" if val > 0 else "background-color: #F8D7DA; color: #721C24;" if val < 0 else "background-color: #C6EFCE; color: #155724;", subset=["Diferencia (Cargado vs Fichado)"]), use_container_width=True)
-
-                    out_q = io.BytesIO()
-                    with pd.ExcelWriter(out_q, engine="openpyxl") as writer: df_q_final.to_excel(writer, index=False, sheet_name="Resumen Quincenal")
-                    out_q.seek(0)
-                    st.download_button("📥 Descargar Resumen Quincenal (Excel)", data=out_q, file_name=f"Resumen_Horas_{quincena_sel.replace(' ', '_')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                else: st.warning("No se encontraron registros de horas cargadas.")
-            except Exception as e_q: st.error(f"Error al calcular: {e_q}")
+                        out_q = io.BytesIO()
+                        with pd.ExcelWriter(out_q, engine="openpyxl") as writer: df_q_final.to_excel(writer, index=False, sheet_name="Resumen Horas")
+                        out_q.seek(0)
+                        st.download_button("📥 Descargar Resumen de Horas (Excel)", data=out_q, file_name=f"Resumen_Horas_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    else: st.warning("No se encontraron registros de horas cargadas para el rango seleccionado.")
+                except Exception as e_q: st.error(f"Error al calcular: {e_q}")
+        else: st.info("No se detectaron pestañas válidas de días en la planilla.")
     else: st.info("Conectando con Google Sheets...")
