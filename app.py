@@ -959,7 +959,18 @@ with t_quincena:
                         kpi4.metric("⏱️ Total Horas Cargadas", f"{df_q_final['Total Hs. Cargadas'].sum():.1f} hs")
                         
                         st.divider()
-                        st.dataframe(df_q_final[["Legajo", "Nombre", "Hs. Normales", "Hs. 50%", "Hs. 100%", "Total Hs. Cargadas", "Total Hs. Fichadas (Reloj)", "Diferencia (Cargado vs Fichado)"]].style.applymap(lambda val: "background-color: #FFEB9C; color: #856404;" if val > 0 else "background-color: #F8D7DA; color: #721C24;" if val < 0 else "background-color: #C6EFCE; color: #155724;", subset=["Diferencia (Cargado vs Fichado)"]), use_container_width=True)
+                        st_q_styled = df_q_final[["Legajo", "Nombre", "Hs. Normales", "Hs. 50%", "Hs. 100%", "Total Hs. Cargadas", "Total Hs. Fichadas (Reloj)", "Diferencia (Cargado vs Fichado)"]].style
+                        def func_color_q(val):
+                            if val > 0: return "background-color: #FFEB9C; color: #856404;"
+                            if val < 0: return "background-color: #F8D7DA; color: #721C24;"
+                            return "background-color: #C6EFCE; color: #155724;"
+
+                        if hasattr(st_q_styled, "map"):
+                            st_q_styled = st_q_styled.map(func_color_q, subset=["Diferencia (Cargado vs Fichado)"])
+                        else:
+                            st_q_styled = st_q_styled.applymap(func_color_q, subset=["Diferencia (Cargado vs Fichado)"])
+
+                        st.dataframe(st_q_styled, use_container_width=True)
 
                         out_q = io.BytesIO()
                         with pd.ExcelWriter(out_q, engine="openpyxl") as writer: df_q_final.to_excel(writer, index=False, sheet_name="Resumen Horas")
@@ -1060,17 +1071,34 @@ with t_detalle:
                     c_k4.metric("⚠️ Discrepancias de Horas", len(df_resultado_det[df_resultado_det["Estado de Validación"].str.contains("⚠️")]))
 
                     st.divider()
-                    st.dataframe(
-                        df_resultado_det.style.applymap(
-                            lambda val: "background-color: #C6EFCE; color: #155724;" if "🟢" in str(val)
-                            else "background-color: #F8D7DA; color: #721C24;" if "🔴" in str(val)
-                            else "background-color: #FFEB9C; color: #856404;" if "⚠️" in str(val)
-                            else "background-color: #E2EFDA;" if "🚫" in str(val)
-                            else "",
-                            subset=["Estado de Validación"]
-                        ),
-                        use_container_width=True
+
+                    # Filtro selector por Estado
+                    filtro_estado = st.selectbox(
+                        "🔎 Filtrar Vista por Estado de Carga:",
+                        options=["Todos los Registros", "🔴 Faltan Cargar (Sin Horas Cargadas)", "⚠️ Discrepancias de Horas", "🟢 Carga Completa / Correcta", "🚫 Sector Excluido"]
                     )
+
+                    if filtro_estado != "Todos los Registros":
+                        tag_emoji = filtro_estado.split()[0]
+                        df_mostrar = df_resultado_det[df_resultado_det["Estado de Validación"].str.contains(tag_emoji, na=False)]
+                    else:
+                        df_mostrar = df_resultado_det
+
+                    st_styled_det = df_mostrar.style
+                    def func_color_det(val):
+                        sval = str(val)
+                        if "🟢" in sval: return "background-color: #C6EFCE; color: #155724;"
+                        if "🔴" in sval: return "background-color: #F8D7DA; color: #721C24;"
+                        if "⚠️" in sval: return "background-color: #FFEB9C; color: #856404;"
+                        if "🚫" in sval: return "background-color: #E2EFDA;"
+                        return ""
+
+                    if hasattr(st_styled_det, "map"):
+                        st_styled_det = st_styled_det.map(func_color_det, subset=["Estado de Validación"])
+                    else:
+                        st_styled_det = st_styled_det.applymap(func_color_det, subset=["Estado de Validación"])
+
+                    st.dataframe(st_styled_det, use_container_width=True)
 
                     out_det = io.BytesIO()
                     with pd.ExcelWriter(out_det, engine="openpyxl") as writer:
