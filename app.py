@@ -110,35 +110,55 @@ def cargar_dataframe_fichada(fh_bytes):
     nombre_hoja = "Hoja2" if "Hoja2" in xl.sheet_names else (xl.sheet_names[1] if len(xl.sheet_names) > 1 else xl.sheet_names[0])
     return pd.read_excel(fh_bytes, sheet_name=nombre_hoja, header=None)
 
-# 🚀 NUEVA FUNCIÓN AGREGADA PARA HACER EL CÓDIGO INDESTRUCTIBLE A CAMBIOS DE FORMATO
+# 🚀 MOTOR ACTUALIZADO: Detecta dinámicamente columnas como 'hs.ing.' y 'hs. Sal.'
 def detectar_estructura_fichada(df_raw):
     """Detecta dinámicamente la fila de inicio y las columnas clave del archivo de fichada."""
-    header_row = 1 # por defecto (index 1 = fila 2 Excel)
-    col_leg = 2    # por defecto (col C)
-    col_nom = 3    # por defecto (col D)
-    col_ing = 4    # por defecto (col E)
-    col_egr = 5    # por defecto (col F)
-    col_nov = 12   # por defecto (col M)
+    header_row = 1 
+    col_leg = 2    
+    col_nom = 3    
+    col_ing = 4    
+    col_egr = 5    
+    col_nov = 12   
 
-    # Buscar en qué fila están los títulos realmente
     for idx in range(min(15, len(df_raw))):
         row_str = " ".join([str(val).upper() for val in df_raw.iloc[idx].values if pd.notna(val)])
-        if "LEGAJO" in row_str or "APELLIDO" in row_str or "NOMBRE" in row_str:
+        if any(k in row_str for k in ["LEGAJO", "APELLIDO", "NOMBRE", "HS.ING"]):
             header_row = idx
             break
 
-    # Una vez hallado el título, buscar en qué número de columna cayó cada dato
     if header_row < len(df_raw):
         headers = [str(v).upper() for v in df_raw.iloc[header_row].values]
         for idx, val in enumerate(headers):
             if "LEGAJO" in val or "LEG" in val: col_leg = idx
             elif "NOMBRE" in val or "APELLIDO" in val: col_nom = idx
-            elif "INGRESO" in val or "ENTRADA" in val or "1RA" in val or "PRIMERA" in val: col_ing = idx
-            elif "EGRESO" in val or "SALIDA" in val or "ULTIMA" in val or "ÚLTIMA" in val: col_egr = idx
-            elif "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
+            elif any(k in val for k in ["INGRESO", "ENTRADA", "1RA", "HS.ING"]): col_ing = idx
+            elif any(k in val for k in ["EGRESO", "SALIDA", "ULTIMA", "HS. SAL"]): col_egr = idx
+            elif "OBRA" in val or "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
 
-    # Retorna: fila donde empiezan los datos reales, y los índices de las columnas
     return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
+
+# 🚀 CONVERSOR ACTUALIZADO: Soporta enteros (6, 18), formato hora y marcas de "X"
+def convertir_a_horas_decimal(val):
+    """Convierte cualquier representación de hora a horas decimales (soporta 'X', enteros, etc.)"""
+    if pd.isna(val) or val == "" or str(val).strip().upper() in ["--:--", "NAN", "NONE", "NULL", "X"]:
+        return None
+    try:
+        if isinstance(val, datetime.time):
+            return val.hour + val.minute / 60.0
+        if isinstance(val, (pd.Timestamp, datetime.datetime)):
+            return val.hour + val.minute / 60.0
+        
+        s_val = str(val).strip().replace(",", ".")
+        if ":" in s_val:
+            parts = s_val.split(":")
+            h = float(parts[0])
+            m = float(parts[1]) if len(parts) > 1 else 0.0
+            return h + m / 60.0
+            
+        f_val = float(s_val)
+        return f_val
+    except ValueError:
+        return None
 
 def obtener_notificaciones_drive(file_id, mime_type=None):
     if not file_id: return {}, {}
@@ -303,26 +323,6 @@ def extraer_horas(val):
     if match: return float(match.group(1).replace(",", "."))
     return 0.0
 
-def convertir_a_horas_decimal(val):
-    """Convierte cualquier representación de hora (float, int, 'HH:MM', '6.0', datetime.time) a horas decimales"""
-    if pd.isna(val) or val == "" or str(val).strip().lower() in ["--:--", "nan", "none", "null"]:
-        return None
-    try:
-        if isinstance(val, datetime.time):
-            return val.hour + val.minute / 60.0
-        if isinstance(val, (pd.Timestamp, datetime.datetime)):
-            return val.hour + val.minute / 60.0
-        s_val = str(val).strip().replace(",", ".")
-        if ":" in s_val:
-            parts = s_val.split(":")
-            h = float(parts[0])
-            m = float(parts[1]) if len(parts) > 1 else 0.0
-            return h + m / 60.0
-        f_val = float(s_val)
-        return f_val
-    except Exception:
-        return None
-
 def calcular_horas_fichada(ing, sal):
     i = convertir_a_horas_decimal(ing)
     s = convertir_a_horas_decimal(sal)
@@ -463,7 +463,6 @@ with t_reporte:
 
                 dff = dff_raw.copy()
 
-                # --- 🚀 AQUI APLICAMOS LA DETECCIÓN DINÁMICA ---
                 start_row_f, c_leg, c_nom, c_ing, c_egr, c_nov = detectar_estructura_fichada(dff)
 
                 keywords_novedades = {
@@ -479,7 +478,6 @@ with t_reporte:
 
                 all_fichadas_list, fd_by_legajo, fd_by_name = [], {}, {}
 
-                # Ahora iteramos usando la fila de inicio y columnas detectadas automáticamente
                 for i in range(start_row_f, len(dff)):
                     lv = dff.iloc[i, c_leg] if c_leg < len(dff.columns) else None
                     nv = dff.iloc[i, c_nom] if c_nom < len(dff.columns) else None
@@ -581,7 +579,6 @@ with t_reporte:
                                         wb_fichada = load_workbook(fh_fichada)
                                         ws_fichada = wb_fichada["Hoja2"] if "Hoja2" in wb_fichada.sheetnames else wb_fichada.active
                                         
-                                        # Índice dinámico para guardar en la columna correcta en openpyxl (índice base 1)
                                         col_leg_ws = c_leg + 1
                                         col_nom_ws = c_nom + 1
                                         col_nov_ws = c_nov + 1
@@ -944,7 +941,6 @@ with t_quincena:
                                         fh_loc = descargar_archivo_drive(f_id)
                                         dff_loc = cargar_dataframe_fichada(fh_loc)
                                         
-                                        # 🚀 Detección dinámica de formato en el recuento
                                         start_row_q, c_leg_q, c_nom_q, c_ing_q, c_egr_q, c_nov_q = detectar_estructura_fichada(dff_loc)
                                         
                                         for idx_fl in range(start_row_q, len(dff_loc)):
@@ -1007,7 +1003,6 @@ with t_detalle:
                     fh_fichada_det = descargar_archivo_drive(af_selected_id)
                     dff_det = cargar_dataframe_fichada(fh_fichada_det)
 
-                # 🚀 Detección dinámica de filas y columnas para el control de horarios
                 start_row_d, c_leg_d, c_nom_d, c_ing_d, c_egr_d, c_nov_d = detectar_estructura_fichada(dff_det)
 
                 with st.spinner("Procesando datos de la planilla de carga..."):
@@ -1037,7 +1032,6 @@ with t_detalle:
 
                 filas_detalle = []
                 
-                # Iterar con las columnas halladas en vez de usar [i, 2], [i, 3] fijo.
                 for i in range(start_row_d, len(dff_det)):
                     lv = dff_det.iloc[i, c_leg_d] if c_leg_d < len(dff_det.columns) else None
                     nv = dff_det.iloc[i, c_nom_d] if c_nom_d < len(dff_det.columns) else None
