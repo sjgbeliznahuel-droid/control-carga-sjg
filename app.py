@@ -6,6 +6,7 @@ import time
 import unicodedata
 import json
 import pandas as pd
+import numpy as np
 import requests
 import streamlit as st
 from openpyxl import Workbook, load_workbook
@@ -108,6 +109,36 @@ def cargar_dataframe_fichada(fh_bytes):
     xl = pd.ExcelFile(fh_bytes)
     nombre_hoja = "Hoja2" if "Hoja2" in xl.sheet_names else (xl.sheet_names[1] if len(xl.sheet_names) > 1 else xl.sheet_names[0])
     return pd.read_excel(fh_bytes, sheet_name=nombre_hoja, header=None)
+
+# 🚀 NUEVA FUNCIÓN AGREGADA PARA HACER EL CÓDIGO INDESTRUCTIBLE A CAMBIOS DE FORMATO
+def detectar_estructura_fichada(df_raw):
+    """Detecta dinámicamente la fila de inicio y las columnas clave del archivo de fichada."""
+    header_row = 1 # por defecto (index 1 = fila 2 Excel)
+    col_leg = 2    # por defecto (col C)
+    col_nom = 3    # por defecto (col D)
+    col_ing = 4    # por defecto (col E)
+    col_egr = 5    # por defecto (col F)
+    col_nov = 12   # por defecto (col M)
+
+    # Buscar en qué fila están los títulos realmente
+    for idx in range(min(15, len(df_raw))):
+        row_str = " ".join([str(val).upper() for val in df_raw.iloc[idx].values if pd.notna(val)])
+        if "LEGAJO" in row_str or "APELLIDO" in row_str or "NOMBRE" in row_str:
+            header_row = idx
+            break
+
+    # Una vez hallado el título, buscar en qué número de columna cayó cada dato
+    if header_row < len(df_raw):
+        headers = [str(v).upper() for v in df_raw.iloc[header_row].values]
+        for idx, val in enumerate(headers):
+            if "LEGAJO" in val or "LEG" in val: col_leg = idx
+            elif "NOMBRE" in val or "APELLIDO" in val: col_nom = idx
+            elif "INGRESO" in val or "ENTRADA" in val or "1RA" in val or "PRIMERA" in val: col_ing = idx
+            elif "EGRESO" in val or "SALIDA" in val or "ULTIMA" in val or "ÚLTIMA" in val: col_egr = idx
+            elif "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
+
+    # Retorna: fila donde empiezan los datos reales, y los índices de las columnas
+    return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
 
 def obtener_notificaciones_drive(file_id, mime_type=None):
     if not file_id: return {}, {}
@@ -432,6 +463,9 @@ with t_reporte:
 
                 dff = dff_raw.copy()
 
+                # --- 🚀 AQUI APLICAMOS LA DETECCIÓN DINÁMICA ---
+                start_row_f, c_leg, c_nom, c_ing, c_egr, c_nov = detectar_estructura_fichada(dff)
+
                 keywords_novedades = {
                     "COMPENSATORIO": "Compensatorio", "COMPENSATORIA": "Compensatorio",
                     "ENFERMO": "Enfermo / Lic. Médica", "ENFERMEDAD": "Enfermo / Lic. Médica",
@@ -445,15 +479,20 @@ with t_reporte:
 
                 all_fichadas_list, fd_by_legajo, fd_by_name = [], {}, {}
 
-                for i in range(2, len(dff)):
-                    lv, nv = dff.iloc[i, 2], dff.iloc[i, 3]
+                # Ahora iteramos usando la fila de inicio y columnas detectadas automáticamente
+                for i in range(start_row_f, len(dff)):
+                    lv = dff.iloc[i, c_leg] if c_leg < len(dff.columns) else None
+                    nv = dff.iloc[i, c_nom] if c_nom < len(dff.columns) else None
                     
+                    if str(lv).startswith('#'): lv = None
+                    if str(nv).startswith('#'): nv = None
+
                     nom_str = str(nv).strip() if pd.notna(nv) else ""
                     for kw in keywords_novedades.keys():
                         nom_str = re.sub(rf"\s*-\s*{kw}.*", "", nom_str, flags=re.IGNORECASE).strip()
 
-                    col_m_val = str(dff.iloc[i, 12]).upper() if len(dff.columns) > 12 and pd.notna(dff.iloc[i, 12]) else ""
-                    row_text_sin_nombre = " ".join([str(val).upper() for idx_v, val in enumerate(dff.iloc[i].values) if idx_v != 3 and pd.notna(val)])
+                    col_m_val = str(dff.iloc[i, c_nov]).upper() if c_nov < len(dff.columns) and pd.notna(dff.iloc[i, c_nov]) else ""
+                    row_text_sin_nombre = " ".join([str(val).upper() for idx_v, val in enumerate(dff.iloc[i].values) if idx_v != c_nom and pd.notna(val)])
                     
                     novedad_detectada = None
                     for kw, label in keywords_novedades.items():
@@ -541,6 +580,11 @@ with t_reporte:
                                         fh_fichada.seek(0)
                                         wb_fichada = load_workbook(fh_fichada)
                                         ws_fichada = wb_fichada["Hoja2"] if "Hoja2" in wb_fichada.sheetnames else wb_fichada.active
+                                        
+                                        # Índice dinámico para guardar en la columna correcta en openpyxl (índice base 1)
+                                        col_leg_ws = c_leg + 1
+                                        col_nom_ws = c_nom + 1
+                                        col_nov_ws = c_nov + 1
 
                                         for index, row_edit in cambios.iterrows():
                                             leg_buscar = limpiar_legajo(row_edit["LEGAJO"])
@@ -548,13 +592,13 @@ with t_reporte:
                                             nov_asignar = str(row_edit["Asignar Novedad"]).strip()
 
                                             for r_idx in range(1, ws_fichada.max_row + 1):
-                                                cell_val = ws_fichada.cell(row=r_idx, column=3).value
-                                                cell_name = str(ws_fichada.cell(row=r_idx, column=4).value or "").strip()
+                                                cell_val = ws_fichada.cell(row=r_idx, column=col_leg_ws).value
+                                                cell_name = str(ws_fichada.cell(row=r_idx, column=col_nom_ws).value or "").strip()
                                                 cell_leg = limpiar_legajo(cell_val)
                                                 match_found = (cell_leg == leg_buscar) if (cell_leg is not None and leg_buscar is not None) else (nom_buscar and nom_buscar.lower() in cell_name.lower())
 
                                                 if match_found:
-                                                    ws_fichada.cell(row=r_idx, column=13).value = nov_asignar
+                                                    ws_fichada.cell(row=r_idx, column=col_nov_ws).value = nov_asignar
                                                     break
 
                                         out_bytes = io.BytesIO()
@@ -899,10 +943,23 @@ with t_quincena:
                                     try:
                                         fh_loc = descargar_archivo_drive(f_id)
                                         dff_loc = cargar_dataframe_fichada(fh_loc)
-                                        for idx_fl in range(2, len(dff_loc)):
-                                            l_f_clean = limpiar_legajo(dff_loc.iloc[idx_fl, 2])
+                                        
+                                        # 🚀 Detección dinámica de formato en el recuento
+                                        start_row_q, c_leg_q, c_nom_q, c_ing_q, c_egr_q, c_nov_q = detectar_estructura_fichada(dff_loc)
+                                        
+                                        for idx_fl in range(start_row_q, len(dff_loc)):
+                                            lv_q = dff_loc.iloc[idx_fl, c_leg_q] if c_leg_q < len(dff_loc.columns) else None
+                                            if str(lv_q).startswith('#'): lv_q = None
+
+                                            l_f_clean = limpiar_legajo(lv_q)
                                             if l_f_clean is not None:
-                                                fichadas_horas_dict[l_f_clean] = fichadas_horas_dict.get(l_f_clean, 0.0) + calcular_horas_fichada(dff_loc.iloc[idx_fl, 4], dff_loc.iloc[idx_fl, 5])
+                                                ing_q = dff_loc.iloc[idx_fl, c_ing_q] if c_ing_q < len(dff_loc.columns) else ""
+                                                sal_q = dff_loc.iloc[idx_fl, c_egr_q] if c_egr_q < len(dff_loc.columns) else ""
+
+                                                if str(ing_q).startswith('#'): ing_q = ""
+                                                if str(sal_q).startswith('#'): sal_q = ""
+
+                                                fichadas_horas_dict[l_f_clean] = fichadas_horas_dict.get(l_f_clean, 0.0) + calcular_horas_fichada(ing_q, sal_q)
                                     except Exception: pass
 
                         df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
@@ -950,6 +1007,9 @@ with t_detalle:
                     fh_fichada_det = descargar_archivo_drive(af_selected_id)
                     dff_det = cargar_dataframe_fichada(fh_fichada_det)
 
+                # 🚀 Detección dinámica de filas y columnas para el control de horarios
+                start_row_d, c_leg_d, c_nom_d, c_ing_d, c_egr_d, c_nov_d = detectar_estructura_fichada(dff_det)
+
                 with st.spinner("Procesando datos de la planilla de carga..."):
                     dfc_raw_d = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, header=None)
                     header_row_idx_d = 0
@@ -976,11 +1036,18 @@ with t_detalle:
                             mapa_horas_cargadas[normalizar_texto(nom_c)] = mapa_horas_cargadas.get(normalizar_texto(nom_c), 0.0) + hs_c
 
                 filas_detalle = []
-                for i in range(2, len(dff_det)):
-                    lv = dff_det.iloc[i, 2]
-                    nv = dff_det.iloc[i, 3]
-                    ing = dff_det.iloc[i, 4] if len(dff_det.columns) > 4 else ""
-                    sal = dff_det.iloc[i, 5] if len(dff_det.columns) > 5 else ""
+                
+                # Iterar con las columnas halladas en vez de usar [i, 2], [i, 3] fijo.
+                for i in range(start_row_d, len(dff_det)):
+                    lv = dff_det.iloc[i, c_leg_d] if c_leg_d < len(dff_det.columns) else None
+                    nv = dff_det.iloc[i, c_nom_d] if c_nom_d < len(dff_det.columns) else None
+                    ing = dff_det.iloc[i, c_ing_d] if c_ing_d < len(dff_det.columns) else ""
+                    sal = dff_det.iloc[i, c_egr_d] if c_egr_d < len(dff_det.columns) else ""
+
+                    if str(lv).startswith('#'): lv = None
+                    if str(nv).startswith('#'): nv = None
+                    if str(ing).startswith('#'): ing = ""
+                    if str(sal).startswith('#'): sal = ""
 
                     leg_clean = limpiar_legajo(lv)
                     nom_str = str(nv).strip() if pd.notna(nv) else ""
