@@ -104,37 +104,34 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     fh.seek(0)
     return fh
 
-# 🛡️ CAPA 2: Si no detecta la columna, la ubica por proximidad al Nombre
+# 🛡️ CAPA 2: Detecta estructura de fichada (APUNTANDO A COLUMNAS G y H)
 def detectar_estructura_fichada(df_raw):
     header_row = 1 
     col_leg, col_nom, col_ing, col_egr, col_nov = -1, -1, -1, -1, -1
 
+    # Buscar la fila de los títulos
     for idx in range(min(15, len(df_raw))):
         row_str = " ".join([str(val).upper() for val in df_raw.iloc[idx].values if pd.notna(val)])
-        if "APELLIDO" in row_str or "NOMBRE" in row_str:
+        if "APELLIDO" in row_str or "NOMBRE" in row_str or "HS.ING" in row_str:
             header_row = idx
             break
 
+    # Intentar detectar por nombre de columna
     if header_row < len(df_raw):
         headers = [str(v).upper().strip() for v in df_raw.iloc[header_row].values]
         for idx, val in enumerate(headers):
             if "LEGAJO" in val or "LEG" in val: col_leg = idx
             elif "NOMBRE" in val or "APELLIDO" in val: col_nom = idx
-            elif "ING" in val or "ENTRADA" in val or "1RA" in val: col_ing = idx
-            elif "SAL" in val or "EGRESO" in val or "ULTIMA" in val: col_egr = idx
+            elif "ING" in val or "ENTRADA" in val or "1RA" in val or "HS.ING" in val: col_ing = idx
+            elif "SAL" in val or "EGRESO" in val or "ULTIMA" in val or "HS. SAL" in val: col_egr = idx
             elif "OBRA" in val or "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
 
-    # Mapeo posicional infalible
-    if col_nom != -1:
-        if col_leg == -1: col_leg = max(0, col_nom - 1)
-        if col_ing == -1: col_ing = col_nom + 1
-        if col_egr == -1: col_egr = col_ing + 1
-    
-    if col_leg == -1: col_leg = 2
-    if col_nom == -1: col_nom = 3
-    if col_ing == -1: col_ing = 4
-    if col_egr == -1: col_egr = 5
-    if col_nov == -1: col_nov = 12
+    # 🚀 POSICIONES EXACTAS SEGÚN TU EXCEL:
+    if col_leg == -1: col_leg = 2   # Columna C
+    if col_nom == -1: col_nom = 3   # Columna D
+    if col_ing == -1: col_ing = 6   # Columna G (Entrada)
+    if col_egr == -1: col_egr = 7   # Columna H (Salida)
+    if col_nov == -1: col_nov = 12  # Columna M (Obra/Novedad)
 
     return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
 
@@ -143,7 +140,7 @@ def cargar_dataframe_fichada(fh_bytes):
     xl = pd.ExcelFile(fh_bytes)
     hojas_validas = []
     
-    # 1. Escanear TODAS las hojas buscando las que tienen datos de personal
+    # Escanear TODAS las hojas buscando las que tienen datos de personal
     for sheet in xl.sheet_names:
         df_temp = pd.read_excel(fh_bytes, sheet_name=sheet, nrows=15, header=None)
         if df_temp.empty: continue
