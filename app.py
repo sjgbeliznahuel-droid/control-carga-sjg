@@ -6,7 +6,6 @@ import time
 import unicodedata
 import json
 import pandas as pd
-import numpy as np
 import requests
 import streamlit as st
 from openpyxl import Workbook, load_workbook
@@ -104,84 +103,11 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     fh.seek(0)
     return fh
 
-
-# 🛡️ CAPA 2 (ESTABLE Y OPTIMIZADA): Búsqueda acotada y segura
-def detectar_estructura_fichada(df_raw):
-    header_row = 0 
-    col_leg, col_nom, col_ing, col_egr, col_nov = -1, -1, -1, -1, -1
-
-    if df_raw.empty:
-        return header_row, 2, 3, 6, 7, 12
-
-    # Buscar la fila de los títulos de forma acotada (máximo 20 filas) para evitar bloqueos
-    limite_busqueda = min(20, len(df_raw))
-    for idx in range(limite_busqueda):
-        row_str = " ".join([str(val).upper() for val in df_raw.iloc[idx].values if pd.notna(val)])
-        if "APELLIDO" in row_str or "NOMBRE" in row_str or "LEGAJO" in row_str or "ENTRADA" in row_str:
-            header_row = idx
-            break
-
-    if header_row < len(df_raw):
-        headers = [str(v).upper().strip() for v in df_raw.iloc[header_row].values]
-        for idx, val in enumerate(headers):
-            if "LEGAJO" in val or "LEG" in val: col_leg = idx
-            elif "NOMBRE" in val or "APELLIDO" in val: col_nom = idx
-            elif "ING" in val or "ENTRADA" in val or "1RA" in val or "HS.ING" in val or "MARCA" in val: col_ing = idx
-            elif "SAL" in val or "EGRESO" in val or "ULTIMA" in val or "HS. SAL" in val: col_egr = idx
-            elif "OBRA" in val or "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
-
-    # Valores fijos probados si el excel viene sin cabecera clara
-    if col_leg == -1: col_leg = 2   # C
-    if col_nom == -1: col_nom = 3   # D
-    if col_ing == -1: col_ing = 6   # G (Entrada)
-    if col_egr == -1: col_egr = 7   # H (Salida)
-    if col_nov == -1: col_nov = 12  # M
-
-    return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
-
-
-# 🛡️ CAPA 1 (OPTIMIZADA): Limpieza automática de filas y celdas "fantasmas"
 def cargar_dataframe_fichada(fh_bytes):
-    xl = pd.ExcelFile(fh_bytes, engine="openpyxl")
-    dfs = []
-    
-    # Si el Excel tiene más de 1 hoja, la 1ra suele ser la carátula inútil. La ignoramos.
-    hojas_a_leer = xl.sheet_names[1:] if len(xl.sheet_names) > 1 else xl.sheet_names
-    
-    for sheet in hojas_a_leer:
-        df_s = pd.read_excel(fh_bytes, sheet_name=sheet, header=None)
-        if not df_s.empty:
-            # Eliminar filas y columnas completamente vacías que inflan el archivo artificialmente
-            df_s = df_s.dropna(how="all").dropna(axis=1, how="all")
-            if not df_s.empty:
-                dfs.append(df_s)
-            
-    if dfs:
-        return pd.concat(dfs, ignore_index=True)
-    return pd.DataFrame()
-
-
-# 🛡️ CAPA 3: Extracción de números puros mediante Regex
-def convertir_a_horas_decimal(val):
-    if pd.isna(val) or val == "": return None
-    s_val = str(val).upper().replace("\xa0", " ").strip()
-    
-    if s_val in ["--:--", "NAN", "NONE", "NULL", "X", "-"]: return None
-    try:
-        if isinstance(val, datetime.time): return val.hour + val.minute / 60.0
-        if isinstance(val, (pd.Timestamp, datetime.datetime)): return val.hour + val.minute / 60.0
-        
-        s_val = s_val.replace(",", ".")
-        match = re.search(r"(\d+[:\.]?\d*)", s_val)
-        if not match: return None
-        
-        clean_val = match.group(1)
-        if ":" in clean_val:
-            parts = clean_val.split(":")
-            return float(parts[0]) + (float(parts[1]) / 60.0 if len(parts) > 1 and parts[1] else 0.0)
-        return float(clean_val)
-    except Exception:
-        return None
+    """Carga de forma flexible la solapa Hoja2 o en su defecto la primera solapa disponible sin header previo"""
+    xl = pd.ExcelFile(fh_bytes)
+    nombre_hoja = "Hoja2" if "Hoja2" in xl.sheet_names else (xl.sheet_names[1] if len(xl.sheet_names) > 1 else xl.sheet_names[0])
+    return pd.read_excel(fh_bytes, sheet_name=nombre_hoja, header=None)
 
 def obtener_notificaciones_drive(file_id, mime_type=None):
     if not file_id: return {}, {}
@@ -346,6 +272,26 @@ def extraer_horas(val):
     if match: return float(match.group(1).replace(",", "."))
     return 0.0
 
+def convertir_a_horas_decimal(val):
+    """Convierte cualquier representación de hora (float, int, 'HH:MM', '6.0', datetime.time) a horas decimales"""
+    if pd.isna(val) or val == "" or str(val).strip().lower() in ["--:--", "nan", "none", "null"]:
+        return None
+    try:
+        if isinstance(val, datetime.time):
+            return val.hour + val.minute / 60.0
+        if isinstance(val, (pd.Timestamp, datetime.datetime)):
+            return val.hour + val.minute / 60.0
+        s_val = str(val).strip().replace(",", ".")
+        if ":" in s_val:
+            parts = s_val.split(":")
+            h = float(parts[0])
+            m = float(parts[1]) if len(parts) > 1 else 0.0
+            return h + m / 60.0
+        f_val = float(s_val)
+        return f_val
+    except Exception:
+        return None
+
 def calcular_horas_fichada(ing, sal):
     i = convertir_a_horas_decimal(ing)
     s = convertir_a_horas_decimal(sal)
@@ -451,7 +397,7 @@ with t_reporte:
         if st.session_state["mostrar_reporte"]:
             try:
                 af_selected_id = mapa_archivos.get(af_selected)
-                with st.spinner("Descargando fichadas desde Drive (Múltiples hojas)..."):
+                with st.spinner("Descargando fichada desde Drive..."):
                     fh_fichada = descargar_archivo_drive(af_selected_id)
 
                 d_pestana, m_pestana = obtener_dia_mes(nh)
@@ -486,8 +432,6 @@ with t_reporte:
 
                 dff = dff_raw.copy()
 
-                start_row_f, c_leg, c_nom, c_ing, c_egr, c_nov = detectar_estructura_fichada(dff)
-
                 keywords_novedades = {
                     "COMPENSATORIO": "Compensatorio", "COMPENSATORIA": "Compensatorio",
                     "ENFERMO": "Enfermo / Lic. Médica", "ENFERMEDAD": "Enfermo / Lic. Médica",
@@ -501,19 +445,15 @@ with t_reporte:
 
                 all_fichadas_list, fd_by_legajo, fd_by_name = [], {}, {}
 
-                for i in range(start_row_f, len(dff)):
-                    lv = dff.iloc[i, c_leg] if c_leg < len(dff.columns) else None
-                    nv = dff.iloc[i, c_nom] if c_nom < len(dff.columns) else None
+                for i in range(2, len(dff)):
+                    lv, nv = dff.iloc[i, 2], dff.iloc[i, 3]
                     
-                    if str(lv).startswith('#'): lv = None
-                    if str(nv).startswith('#'): nv = None
-
                     nom_str = str(nv).strip() if pd.notna(nv) else ""
                     for kw in keywords_novedades.keys():
                         nom_str = re.sub(rf"\s*-\s*{kw}.*", "", nom_str, flags=re.IGNORECASE).strip()
 
-                    col_m_val = str(dff.iloc[i, c_nov]).upper() if c_nov < len(dff.columns) and pd.notna(dff.iloc[i, c_nov]) else ""
-                    row_text_sin_nombre = " ".join([str(val).upper() for idx_v, val in enumerate(dff.iloc[i].values) if idx_v != c_nom and pd.notna(val)])
+                    col_m_val = str(dff.iloc[i, 12]).upper() if len(dff.columns) > 12 and pd.notna(dff.iloc[i, 12]) else ""
+                    row_text_sin_nombre = " ".join([str(val).upper() for idx_v, val in enumerate(dff.iloc[i].values) if idx_v != 3 and pd.notna(val)])
                     
                     novedad_detectada = None
                     for kw, label in keywords_novedades.items():
@@ -600,36 +540,22 @@ with t_reporte:
                                     with st.spinner("Actualizando Excel en Google Drive..."):
                                         fh_fichada.seek(0)
                                         wb_fichada = load_workbook(fh_fichada)
-                                        
-                                        hojas_fichada = wb_fichada.sheetnames
-                                        
-                                        col_leg_ws = c_leg + 1
-                                        col_nom_ws = c_nom + 1
-                                        col_nov_ws = c_nov + 1
+                                        ws_fichada = wb_fichada["Hoja2"] if "Hoja2" in wb_fichada.sheetnames else wb_fichada.active
 
                                         for index, row_edit in cambios.iterrows():
                                             leg_buscar = limpiar_legajo(row_edit["LEGAJO"])
                                             nom_buscar = str(row_edit["Nombre y Apellido (Fichada)"]).strip()
                                             nov_asignar = str(row_edit["Asignar Novedad"]).strip()
 
-                                            actualizado = False
-                                            for h_name in hojas_fichada:
-                                                if actualizado: break
-                                                ws_temp = wb_fichada[h_name]
-                                                for r_idx in range(1, ws_temp.max_row + 1):
-                                                    cell_val = ws_temp.cell(row=r_idx, column=col_leg_ws).value
-                                                    cell_name = str(ws_temp.cell(row=r_idx, column=col_nom_ws).value or "").strip()
-                                                    cell_leg = limpiar_legajo(cell_val)
-                                                    
-                                                    if not cell_name and cell_leg is None:
-                                                        continue
+                                            for r_idx in range(1, ws_fichada.max_row + 1):
+                                                cell_val = ws_fichada.cell(row=r_idx, column=3).value
+                                                cell_name = str(ws_fichada.cell(row=r_idx, column=4).value or "").strip()
+                                                cell_leg = limpiar_legajo(cell_val)
+                                                match_found = (cell_leg == leg_buscar) if (cell_leg is not None and leg_buscar is not None) else (nom_buscar and nom_buscar.lower() in cell_name.lower())
 
-                                                    match_found = (cell_leg == leg_buscar) if (cell_leg is not None and leg_buscar is not None) else (nom_buscar and nom_buscar.lower() in cell_name.lower())
-
-                                                    if match_found:
-                                                        ws_temp.cell(row=r_idx, column=col_nov_ws).value = nov_asignar
-                                                        actualizado = True
-                                                        break
+                                                if match_found:
+                                                    ws_fichada.cell(row=r_idx, column=13).value = nov_asignar
+                                                    break
 
                                         out_bytes = io.BytesIO()
                                         wb_fichada.save(out_bytes)
@@ -973,22 +899,10 @@ with t_quincena:
                                     try:
                                         fh_loc = descargar_archivo_drive(f_id)
                                         dff_loc = cargar_dataframe_fichada(fh_loc)
-                                        
-                                        start_row_q, c_leg_q, c_nom_q, c_ing_q, c_egr_q, c_nov_q = detectar_estructura_fichada(dff_loc)
-                                        
-                                        for idx_fl in range(start_row_q, len(dff_loc)):
-                                            lv_q = dff_loc.iloc[idx_fl, c_leg_q] if c_leg_q < len(dff_loc.columns) else None
-                                            if str(lv_q).startswith('#'): lv_q = None
-
-                                            l_f_clean = limpiar_legajo(lv_q)
+                                        for idx_fl in range(2, len(dff_loc)):
+                                            l_f_clean = limpiar_legajo(dff_loc.iloc[idx_fl, 2])
                                             if l_f_clean is not None:
-                                                ing_q = dff_loc.iloc[idx_fl, c_ing_q] if c_ing_q < len(dff_loc.columns) else ""
-                                                sal_q = dff_loc.iloc[idx_fl, c_egr_q] if c_egr_q < len(dff_loc.columns) else ""
-
-                                                if str(ing_q).startswith('#'): ing_q = ""
-                                                if str(sal_q).startswith('#'): sal_q = ""
-
-                                                fichadas_horas_dict[l_f_clean] = fichadas_horas_dict.get(l_f_clean, 0.0) + calcular_horas_fichada(ing_q, sal_q)
+                                                fichadas_horas_dict[l_f_clean] = fichadas_horas_dict.get(l_f_clean, 0.0) + calcular_horas_fichada(dff_loc.iloc[idx_fl, 4], dff_loc.iloc[idx_fl, 5])
                                     except Exception: pass
 
                         df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
@@ -1036,8 +950,6 @@ with t_detalle:
                     fh_fichada_det = descargar_archivo_drive(af_selected_id)
                     dff_det = cargar_dataframe_fichada(fh_fichada_det)
 
-                start_row_d, c_leg_d, c_nom_d, c_ing_d, c_egr_d, c_nov_d = detectar_estructura_fichada(dff_det)
-
                 with st.spinner("Procesando datos de la planilla de carga..."):
                     dfc_raw_d = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, header=None)
                     header_row_idx_d = 0
@@ -1064,17 +976,11 @@ with t_detalle:
                             mapa_horas_cargadas[normalizar_texto(nom_c)] = mapa_horas_cargadas.get(normalizar_texto(nom_c), 0.0) + hs_c
 
                 filas_detalle = []
-                
-                for i in range(start_row_d, len(dff_det)):
-                    lv = dff_det.iloc[i, c_leg_d] if c_leg_d < len(dff_det.columns) else None
-                    nv = dff_det.iloc[i, c_nom_d] if c_nom_d < len(dff_det.columns) else None
-                    ing = dff_det.iloc[i, c_ing_d] if c_ing_d < len(dff_det.columns) else ""
-                    sal = dff_det.iloc[i, c_egr_d] if c_egr_d < len(dff_det.columns) else ""
-
-                    if str(lv).startswith('#'): lv = None
-                    if str(nv).startswith('#'): nv = None
-                    if str(ing).startswith('#'): ing = ""
-                    if str(sal).startswith('#'): sal = ""
+                for i in range(2, len(dff_det)):
+                    lv = dff_det.iloc[i, 2]
+                    nv = dff_det.iloc[i, 3]
+                    ing = dff_det.iloc[i, 4] if len(dff_det.columns) > 4 else ""
+                    sal = dff_det.iloc[i, 5] if len(dff_det.columns) > 5 else ""
 
                     leg_clean = limpiar_legajo(lv)
                     nom_str = str(nv).strip() if pd.notna(nv) else ""
