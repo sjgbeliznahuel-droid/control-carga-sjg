@@ -104,15 +104,20 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     fh.seek(0)
     return fh
 
-# 🛡️ CAPA 2 (ESTABLE): Detección original + Fallback columnas G y H
+
+# 🛡️ CAPA 2 (ESTABLE Y OPTIMIZADA): Búsqueda acotada y segura
 def detectar_estructura_fichada(df_raw):
-    header_row = 1 
+    header_row = 0 
     col_leg, col_nom, col_ing, col_egr, col_nov = -1, -1, -1, -1, -1
 
-    # Buscar la fila de los títulos de forma segura
-    for idx in range(min(15, len(df_raw))):
+    if df_raw.empty:
+        return header_row, 2, 3, 6, 7, 12
+
+    # Buscar la fila de los títulos de forma acotada (máximo 20 filas) para evitar bloqueos
+    limite_busqueda = min(20, len(df_raw))
+    for idx in range(limite_busqueda):
         row_str = " ".join([str(val).upper() for val in df_raw.iloc[idx].values if pd.notna(val)])
-        if "APELLIDO" in row_str or "NOMBRE" in row_str or "LEGAJO" in row_str:
+        if "APELLIDO" in row_str or "NOMBRE" in row_str or "LEGAJO" in row_str or "ENTRADA" in row_str:
             header_row = idx
             break
 
@@ -121,7 +126,7 @@ def detectar_estructura_fichada(df_raw):
         for idx, val in enumerate(headers):
             if "LEGAJO" in val or "LEG" in val: col_leg = idx
             elif "NOMBRE" in val or "APELLIDO" in val: col_nom = idx
-            elif "ING" in val or "ENTRADA" in val or "1RA" in val or "HS.ING" in val: col_ing = idx
+            elif "ING" in val or "ENTRADA" in val or "1RA" in val or "HS.ING" in val or "MARCA" in val: col_ing = idx
             elif "SAL" in val or "EGRESO" in val or "ULTIMA" in val or "HS. SAL" in val: col_egr = idx
             elif "OBRA" in val or "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
 
@@ -135,9 +140,9 @@ def detectar_estructura_fichada(df_raw):
     return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
 
 
-# 🛡️ CAPA 1 (ESTABLE): Suma Hoja 2 y Hoja 3 sin romper filas
+# 🛡️ CAPA 1 (OPTIMIZADA): Limpieza automática de filas y celdas "fantasmas"
 def cargar_dataframe_fichada(fh_bytes):
-    xl = pd.ExcelFile(fh_bytes)
+    xl = pd.ExcelFile(fh_bytes, engine="openpyxl")
     dfs = []
     
     # Si el Excel tiene más de 1 hoja, la 1ra suele ser la carátula inútil. La ignoramos.
@@ -146,9 +151,11 @@ def cargar_dataframe_fichada(fh_bytes):
     for sheet in hojas_a_leer:
         df_s = pd.read_excel(fh_bytes, sheet_name=sheet, header=None)
         if not df_s.empty:
-            dfs.append(df_s)
+            # Eliminar filas y columnas completamente vacías que inflan el archivo artificialmente
+            df_s = df_s.dropna(how="all").dropna(axis=1, how="all")
+            if not df_s.empty:
+                dfs.append(df_s)
             
-    # Unimos las hojas una debajo de la otra. El código luego filtra naturalmente las filas vacías o títulos.
     if dfs:
         return pd.concat(dfs, ignore_index=True)
     return pd.DataFrame()
@@ -594,7 +601,6 @@ with t_reporte:
                                         fh_fichada.seek(0)
                                         wb_fichada = load_workbook(fh_fichada)
                                         
-                                        # NUEVO: Busca por TODAS las hojas del excel original
                                         hojas_fichada = wb_fichada.sheetnames
                                         
                                         col_leg_ws = c_leg + 1
