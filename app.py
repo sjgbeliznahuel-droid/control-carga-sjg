@@ -781,6 +781,9 @@ with t_cierre:
                     notif_mime_type = None
 
             st.write("")
+            # ---- NUEVO CHECKBOX MMYHH EN PESTAÑA CIERRE ----
+            solo_mmyhh_cierre = st.checkbox("👷‍♂️ Filtrar OTs vinculadas al contrato MMYHH", key="chk_mmyhh_cierre")
+            
             col_btn_ej, _ = st.columns([1, 3])
             with col_btn_ej:
                 btn_ejecutar_cierre = st.button("🚀 Ejecutar Cruce de OTs", type="primary")
@@ -811,11 +814,21 @@ with t_cierre:
                         notif_col = next((c for c in dfc_ot.columns if "NOTIFICA" in str(c).upper()), None)
                         sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA", "ÁREA"])), None)
                         resp_col = next((c for c in dfc_ot.columns if "RESPONSABLE" in str(c).upper()), None)
+                        
+                        # Buscamos la columna de nombres para poder filtrar por MMYHH si hace falta
+                        nombre_col_cierre = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), None)
 
                         if ot_col:
                             for _, row_r in dfc_ot.iterrows():
                                 ot_str = normalizar_ot(row_r[ot_col])
                                 if not ot_str: continue
+
+                                # --- FILTRO MMYHH (Ignoramos la fila si no pertenece a la lista) ---
+                                if solo_mmyhh_cierre:
+                                    nom_val = str(row_r[nombre_col_cierre]).strip() if nombre_col_cierre and pd.notna(row_r[nombre_col_cierre]) else ""
+                                    if normalizar_texto(nom_val) not in MMYHH_NORMALIZADOS:
+                                        continue
+                                # -------------------------------------------------------------------
 
                                 sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
                                 fecha_val = str(row_r[fecha_col]).strip() if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan" else s_name
@@ -931,13 +944,18 @@ with t_cierre:
                         with pd.ExcelWriter(out_cierre, engine="openpyxl") as writer:
                             edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
                         out_cierre.seek(0)
+                        
+                        # Modificamos el nombre del archivo de descarga si se aplicó el filtro MMYHH
+                        nombre_archivo_cierre = f"Cierre_OTs_MMYHH_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx" if solo_mmyhh_cierre else f"Cierre_OTs_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx"
+                        
                         st.download_button(
                             label="📥 Descargar Cierre de OTs (Excel)",
                             data=out_cierre,
-                            file_name=f"Cierre_OTs_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx",
+                            file_name=nombre_archivo_cierre,
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
-                else: st.warning("No se encontraron OTs cargadas.")
+                else: 
+                    st.warning("No se encontraron OTs cargadas para los filtros seleccionados.")
         else: st.info("No se detectaron días cargados en la planilla.")
     else: st.info("Conectando con Google Sheets...")
 
