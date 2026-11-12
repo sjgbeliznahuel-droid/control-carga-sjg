@@ -251,6 +251,35 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
         st.error(f"Error al procesar la planilla de notificaciones: {e}")
         return {}, {}
 
+# 🚀 NUEVA FUNCIÓN DE CACHÉ PARA ACELERAR EL CÁLCULO DE HORAS
+@st.cache_data(show_spinner=False, ttl=43200) # La caché dura 12 horas
+def procesar_fichada_drive_cache(file_id):
+    """Descarga y procesa un archivo de fichada guardando solo las horas extraídas, evitando descargas repetitivas."""
+    fichadas_horas = {}
+    try:
+        fh_loc = descargar_archivo_drive(file_id)
+        dff_loc = cargar_dataframe_fichada(fh_loc)
+        start_row_q, c_leg_q, c_nom_q, c_ing_q, c_egr_q, c_nov_q = detectar_estructura_fichada(dff_loc)
+        
+        for idx_fl in range(start_row_q, len(dff_loc)):
+            lv_q = dff_loc.iloc[idx_fl, c_leg_q] if c_leg_q < len(dff_loc.columns) else None
+            if str(lv_q).startswith('#'): lv_q = None
+
+            l_f_clean = limpiar_legajo(lv_q)
+            if l_f_clean is not None:
+                ing_q = dff_loc.iloc[idx_fl, c_ing_q] if c_ing_q < len(dff_loc.columns) else ""
+                sal_q = dff_loc.iloc[idx_fl, c_egr_q] if c_egr_q < len(dff_loc.columns) else ""
+
+                if str(ing_q).startswith('#'): ing_q = ""
+                if str(sal_q).startswith('#'): sal_q = ""
+
+                horas_calculadas = calcular_horas_fichada(ing_q, sal_q)
+                fichadas_horas[l_f_clean] = fichadas_horas.get(l_f_clean, 0.0) + horas_calculadas
+    except Exception:
+        pass
+    return fichadas_horas
+
+
 SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
 
 col_logo, col_titulo, col_refrescar = st.columns([1.2, 2.3, 0.9])
@@ -933,7 +962,6 @@ with t_quincena:
             if btn_calc_q or st.session_state.get("ver_quincena", False):
                 st.session_state["ver_quincena"] = True
                 try:
-                    # 1. Cargar mapeo de notificaciones de Drive si se seleccionó una planilla
                     mapa_notif_drive_q, _ = obtener_notificaciones_drive(notif_file_id_q, notif_mime_type_q) if notif_file_id_q else ({}, {})
 
                     registros_quincena = []
@@ -967,8 +995,7 @@ with t_quincena:
                                     tipo_raw = str(row[tipo_col]).strip().upper()
                                     tipo_cat = "Hs. 50%" if "0.5" in tipo_raw or "50" in tipo_raw else "Hs. 100%" if "1" in tipo_raw or "100" in tipo_raw else "Hs. Normales"
 
-                                # Determinar estado de la OT cruzando con Drive si está disponible
-                                estado_ot = "APROBADA" # Por defecto
+                                estado_ot = "APROBADA"
                                 ot_str = normalizar_ot(row[ot_col_q]) if ot_col_q and pd.notna(row[ot_col_q]) else ""
 
                                 if ot_str and ot_str in mapa_notif_drive_q:
@@ -980,7 +1007,6 @@ with t_quincena:
                                     elif any(k in est_drive for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]):
                                         estado_ot = "APROBADA"
                                 else:
-                                    # Leer estado local de Google Sheets si existe
                                     if estado_col_q and pd.notna(row[estado_col_q]):
                                         est_txt = str(row[estado_col_q]).strip().upper()
                                         if any(k in est_txt for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
@@ -1021,35 +1047,30 @@ with t_quincena:
                         piv_q["Total Hs. Cargadas"] = piv_q["Hs. Aprobadas Total"] + piv_q["Hs. Pendientes Total"] + piv_q["Hs. Rechazadas Total"]
 
                         fichadas_horas_dict = {}
-                        with st.spinner("Analizando fichadas en Google Drive..."):
-                            archivos_drive = obtener_archivos_drive()
-                            mapa_archivos_q = {f['name']: f['id'] for f in archivos_drive if f['name'].lower().endswith(('.xlsx', '.xltx'))}
-                            
-                            for f_loc, f_id in mapa_archivos_q.items():
-                                match_f = re.search(r"fichada[_\s]*(\d{1,2})[-/\.](\d{1,2})", f_loc, re.IGNORECASE)
-                                if match_f:
-                                    d_f = int(match_f.group(1))
-                                    if d_f < desde_dia_q or d_f > hasta_dia_q: continue
-                                    try:
-                                        fh_loc = descargar_archivo_drive(f_id)
-                                        dff_loc = cargar_dataframe_fichada(fh_loc)
-                                        
-                                        start_row_q, c_leg_q, c_nom_q, c_ing_q, c_egr_q, c_nov_q = detectar_estructura_fichada(dff_loc)
-                                        
-                                        for idx_fl in range(start_row_q, len(dff_loc)):
-                                            lv_q = dff_loc.iloc[idx_fl, c_leg_q] if c_leg_q < len(dff_loc.columns) else None
-                                            if str(lv_q).startswith('#'): lv_q = None
-
-                                            l_f_clean = limpiar_legajo(lv_q)
-                                            if l_f_clean is not None:
-                                                ing_q = dff_loc.iloc[idx_fl, c_ing_q] if c_ing_q < len(dff_loc.columns) else ""
-                                                sal_q = dff_loc.iloc[idx_fl, c_egr_q] if c_egr_q < len(dff_loc.columns) else ""
-
-                                                if str(ing_q).startswith('#'): ing_q = ""
-                                                if str(sal_q).startswith('#'): sal_q = ""
-
-                                                fichadas_horas_dict[l_f_clean] = fichadas_horas_dict.get(l_f_clean, 0.0) + calcular_horas_fichada(ing_q, sal_q)
-                                    except Exception: pass
+                        
+                        archivos_drive = obtener_archivos_drive()
+                        mapa_archivos_q = {f['name']: f['id'] for f in archivos_drive if f['name'].lower().endswith(('.xlsx', '.xltx'))}
+                        
+                        archivos_a_procesar = []
+                        for f_loc, f_id in mapa_archivos_q.items():
+                            match_f = re.search(r"fichada[_\s]*(\d{1,2})[-/\.](\d{1,2})", f_loc, re.IGNORECASE)
+                            if match_f:
+                                d_f = int(match_f.group(1))
+                                if desde_dia_q <= d_f <= hasta_dia_q:
+                                    archivos_a_procesar.append((f_loc, f_id))
+                        
+                        if archivos_a_procesar:
+                            bar_q = st.progress(0, text="Iniciando descarga y análisis de fichadas...")
+                            for i, (n_archivo, id_archivo) in enumerate(archivos_a_procesar):
+                                bar_q.progress((i + 1) / len(archivos_a_procesar), text=f"Procesando {n_archivo}...")
+                                try:
+                                    # Usamos la caché para que la segunda vez que se lea esta fichada sea instantáneo
+                                    horas_f = procesar_fichada_drive_cache(id_archivo)
+                                    for leg, hrs in horas_f.items():
+                                        fichadas_horas_dict[leg] = fichadas_horas_dict.get(leg, 0.0) + hrs
+                                except Exception:
+                                    pass
+                            bar_q.empty() # Ocultar la barra de progreso al terminar
 
                         df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
                         df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
