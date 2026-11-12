@@ -251,8 +251,8 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
         st.error(f"Error al procesar la planilla de notificaciones: {e}")
         return {}, {}
 
-# 🚀 NUEVA FUNCIÓN DE CACHÉ PARA ACELERAR EL CÁLCULO DE HORAS
-@st.cache_data(show_spinner=False, ttl=43200) # La caché dura 12 horas
+# 🚀 FUNCIÓN DE CACHÉ PARA ACELERAR EL CÁLCULO DE HORAS (12 HORAS DE DURACIÓN)
+@st.cache_data(show_spinner=False, ttl=43200)
 def procesar_fichada_drive_cache(file_id):
     """Descarga y procesa un archivo de fichada guardando solo las horas extraídas, evitando descargas repetitivas."""
     fichadas_horas = {}
@@ -280,25 +280,18 @@ def procesar_fichada_drive_cache(file_id):
     return fichadas_horas
 
 
-SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
+def limpiar_legajo(val):
+    if pd.isna(val): return None
+    try: return int(float(str(val).strip()))
+    except (ValueError, TypeError): return None
 
-col_logo, col_titulo, col_refrescar = st.columns([1.2, 2.3, 0.9])
-with col_logo: st.markdown(SJG_LOGO_SVG, unsafe_allow_html=True)
-with col_titulo:
-    st.title("Sistema de Control y Validación de Personal")
-    st.caption("Conciliación automatizada de Partes de Carga vs. Fichadas en Puerta (Cloud - En Vivo)")
-with col_refrescar:
-    st.write("")
-    if st.button("🔄 Refrescar App", help="Limpia la caché y fuerza la recarga de datos"):
-        st.cache_data.clear()
-        st.session_state["mostrar_reporte"] = False
-        st.session_state["cruce_cierre_ejecutado"] = False
-        st.rerun()
+def normalizar_texto(val):
+    if pd.isna(val): return ""
+    s = str(val).lower().strip()
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    return " ".join("".join(c for c in s if c.isalnum() or c.isspace()).split())
 
-st.divider()
-
-MESES_NOMBRES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
-
+# --- CONFIGURACIONES DE REGLAS Y CONTRATOS ---
 EXCLUIDOS_SECTOR = {
     60003127: ("Villaseca Urrutia, Silvina", "Seguridad e Higiene"),
     60017753: ("Miño, Dario Oscar", "Seguridad e Higiene"),
@@ -319,21 +312,25 @@ EXCLUIDOS_SECTOR = {
     60008266: ("Lascano, Luis Alejandro", "Coordinación"),
 }
 
-def limpiar_legajo(val):
-    if pd.isna(val): return None
-    try: return int(float(str(val).strip()))
-    except (ValueError, TypeError): return None
+CONTRATO_MMYHH = [
+    "BUSTOS CELEDONIO JOSE",
+    "CARBALLO NASCHEL MANUEL",
+    "COLANDRE VALENTIN",
+    "CORTES RODRIGO MAXIMILIANO",
+    "CORTEZ CLAUDIO JOSE",
+    "DI VIRGILIO LEANDRO GERMAN",
+    "FARIAS RODRIGO DAMIAN",
+    "SAAVEDRA ALBERTO OSCAR",
+    "SIMEAND DIEGO EXEQUIEL",
+    "ZABALA JUAN CRUZ"
+]
+# Normalizamos la lista una vez para agilizar el filtrado luego
+MMYHH_NORMALIZADOS = [normalizar_texto(n) for n in CONTRATO_MMYHH]
 
 def obtener_excel_nube(url):
     response = requests.get(url)
     response.raise_for_status()
     return response.content
-
-def normalizar_texto(val):
-    if pd.isna(val): return ""
-    s = str(val).lower().strip()
-    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
-    return " ".join("".join(c for c in s if c.isalnum() or c.isspace()).split())
 
 def obtener_dia_mes(texto_o_fecha):
     if isinstance(texto_o_fecha, (pd.Timestamp, datetime.date, datetime.datetime)):
@@ -382,6 +379,27 @@ def formatear_horario(val):
         horas += 1
         minutos -= 60
     return f"{horas:02d}:{minutos:02d}"
+
+
+# --- RENDERIZADO VISUAL ---
+SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
+
+col_logo, col_titulo, col_refrescar = st.columns([1.2, 2.3, 0.9])
+with col_logo: st.markdown(SJG_LOGO_SVG, unsafe_allow_html=True)
+with col_titulo:
+    st.title("Sistema de Control y Validación de Personal")
+    st.caption("Conciliación automatizada de Partes de Carga vs. Fichadas en Puerta (Cloud - En Vivo)")
+with col_refrescar:
+    st.write("")
+    if st.button("🔄 Refrescar App", help="Limpia la caché y fuerza la recarga de datos"):
+        st.cache_data.clear()
+        st.session_state["mostrar_reporte"] = False
+        st.session_state["cruce_cierre_ejecutado"] = False
+        st.rerun()
+
+st.divider()
+
+MESES_NOMBRES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
 
 t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena, t_detalle = st.tabs([
     "📥 Carga de Fichadas/RRHH", "📂 1. Carga", "⚙️ 2. Reglas", "📊 3. Reporte", "📋 Cierre de Período", "⏱️ 4. Horas y Período Personalizado", "🔍 5. Control Horarios y Fichadas"
@@ -956,7 +974,7 @@ with t_quincena:
 
             with col_q4:
                 st.write("")
-                st.write("")
+                solo_mmyhh = st.checkbox("👷‍♂️ Filtrar solo contrato MMYHH", key="chk_mmyhh")
                 btn_calc_q = st.button("📊 Calcular Resumen de Horas", type="primary")
 
             if btn_calc_q or st.session_state.get("ver_quincena", False):
@@ -1064,16 +1082,22 @@ with t_quincena:
                             for i, (n_archivo, id_archivo) in enumerate(archivos_a_procesar):
                                 bar_q.progress((i + 1) / len(archivos_a_procesar), text=f"Procesando {n_archivo}...")
                                 try:
-                                    # Usamos la caché para que la segunda vez que se lea esta fichada sea instantáneo
                                     horas_f = procesar_fichada_drive_cache(id_archivo)
                                     for leg, hrs in horas_f.items():
                                         fichadas_horas_dict[leg] = fichadas_horas_dict.get(leg, 0.0) + hrs
                                 except Exception:
                                     pass
-                            bar_q.empty() # Ocultar la barra de progreso al terminar
+                            bar_q.empty() 
 
                         df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
                         df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
+
+                        # --- FILTRO POR CONTRATO MMYHH ---
+                        if solo_mmyhh:
+                            df_q_final = df_q_final[df_q_final["Nombre"].apply(lambda x: normalizar_texto(x) in MMYHH_NORMALIZADOS)]
+                            if df_q_final.empty:
+                                st.warning("No se encontraron registros para el personal del contrato MMYHH en este período.")
+                        # ---------------------------------
 
                         kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
                         kpi1.metric("🟢 Hs. Aprobadas", f"{df_q_final['Hs. Aprobadas Total'].sum():.1f} hs")
@@ -1100,7 +1124,9 @@ with t_quincena:
                         out_q = io.BytesIO()
                         with pd.ExcelWriter(out_q, engine="openpyxl") as writer: df_q_final.to_excel(writer, index=False, sheet_name="Resumen Horas")
                         out_q.seek(0)
-                        st.download_button("📥 Descargar Resumen de Horas (Excel)", data=out_q, file_name=f"Resumen_Horas_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        
+                        nombre_archivo_descarga = f"Resumen_MMYHH_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx" if solo_mmyhh else f"Resumen_Horas_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx"
+                        st.download_button("📥 Descargar Resumen de Horas (Excel)", data=out_q, file_name=nombre_archivo_descarga, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     else: st.warning("No se encontraron registros de horas cargadas para el rango seleccionado.")
                 except Exception as e_q: st.error(f"Error al calcular: {e_q}")
         else: st.info("No se detectaron pestañas válidas de días en la planilla.")
