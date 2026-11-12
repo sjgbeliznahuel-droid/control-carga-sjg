@@ -32,8 +32,8 @@ URL_DESCARGA_SHEET = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxZOKYHQHzLR-gZionm3Ub1z8Rlrz5l6AtR1D8gLKKIeAqhSGMf62vMfsa4F2s1gcweFA/exec"
 DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
 NOTIF_FOLDER_ID = "1GJGTwWRwmrWT-Zgkp4nQcWmm3kk-eR8y"
-# 📂 ID de la carpeta de Certificación en Google Drive (reemplazalo si creaste una nueva carpeta exclusiva)
-CERT_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-" 
+# 📂 ID exacto de la carpeta "certificacion" en Google Drive
+CERT_FOLDER_ID = "1DCkt7I45-dq2hTJYxUKaE-p-jLlbiXqg" 
 
 @st.cache_resource
 def conectar_drive():
