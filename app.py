@@ -251,10 +251,8 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
         st.error(f"Error al procesar la planilla de notificaciones: {e}")
         return {}, {}
 
-# 🚀 FUNCIÓN DE CACHÉ PARA ACELERAR EL CÁLCULO DE HORAS (12 HORAS DE DURACIÓN)
 @st.cache_data(show_spinner=False, ttl=43200)
 def procesar_fichada_drive_cache(file_id):
-    """Descarga y procesa un archivo de fichada guardando solo las horas extraídas, evitando descargas repetitivas."""
     fichadas_horas = {}
     try:
         fh_loc = descargar_archivo_drive(file_id)
@@ -278,7 +276,6 @@ def procesar_fichada_drive_cache(file_id):
     except Exception:
         pass
     return fichadas_horas
-
 
 def limpiar_legajo(val):
     if pd.isna(val): return None
@@ -312,7 +309,6 @@ EXCLUIDOS_SECTOR = {
     60008266: ("Lascano, Luis Alejandro", "Coordinación"),
 }
 
-# 📋 LEGAJOS Y NOMBRES EXACTOS DEL CONTRATO MMYHH (Extraídos de tu captura)
 CONTRATO_MMYHH_LEGAJOS = {
     60005508: "BUSTOS CELEDONIO JOSE",
     60014119: "CARBALLO NASCHEL MANUEL",
@@ -326,23 +322,39 @@ CONTRATO_MMYHH_LEGAJOS = {
     60022855: "ZABALA JUAN CRUZ"
 }
 
-def es_personal_mmyhh(legajo_val, nombre_val):
-    """Filtro infalible: Valida primero por número de Legajo exacto y como respaldo por nombre."""
-    clean_l = limpiar_legajo(legajo_val)
-    if clean_l is not None and clean_l in CONTRATO_MMYHH_LEGAJOS:
+def filtrar_por_contrato(legajo_val, nombre_val, tipo_contrato):
+    """
+    Filtra los registros según el contrato seleccionado:
+    - 'Todos los Contratos': No filtra nada.
+    - 'MMYHH': Solo personal de MMYHH.
+    - 'MOA': Todo el personal EXCEPTO el de MMYHH (MOA puro).
+    """
+    if tipo_contrato == "Todos los Contratos":
         return True
+        
+    clean_l = limpiar_legajo(legajo_val)
+    es_mmyhh = False
     
-    if nombre_val and pd.notna(nombre_val):
+    if clean_l is not None and clean_l in CONTRATO_MMYHH_LEGAJOS:
+        es_mmyhh = True
+    elif nombre_val and pd.notna(nombre_val):
         n_norm = normalizar_texto(nombre_val)
         for m_nom in CONTRATO_MMYHH_LEGAJOS.values():
             m_norm = normalizar_texto(m_nom)
             tokens_m = set(m_norm.split())
             tokens_n = set(n_norm.split())
             if len(tokens_m) > 0 and len(tokens_m.intersection(tokens_n)) >= min(2, len(tokens_m)):
-                return True
+                es_mmyhh = True
+                break
             if m_norm in n_norm or n_norm in m_norm:
-                return True
-    return False
+                es_mmyhh = True
+                break
+
+    if tipo_contrato == "MMYHH":
+        return es_mmyhh
+    elif tipo_contrato == "MOA":
+        return not es_mmyhh
+    return True
 
 def obtener_excel_nube(url):
     response = requests.get(url)
@@ -397,8 +409,6 @@ def formatear_horario(val):
         minutos -= 60
     return f"{horas:02d}:{minutos:02d}"
 
-
-# --- RENDERIZADO VISUAL ---
 SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
 
 col_logo, col_titulo, col_refrescar = st.columns([1.2, 2.3, 0.9])
@@ -798,7 +808,12 @@ with t_cierre:
                     notif_mime_type = None
 
             st.write("")
-            solo_mmyhh_cierre = st.checkbox("👷‍♂️ Filtrar OTs vinculadas al contrato MMYHH", key="chk_mmyhh_cierre")
+            contrato_sel_cierre = st.radio(
+                "🏗️ Filtrar Cierre por Contrato:",
+                options=["Todos los Contratos", "MMYHH", "MOA"],
+                horizontal=True,
+                key="radio_contrato_cierre"
+            )
             
             col_btn_ej, _ = st.columns([1, 3])
             with col_btn_ej:
@@ -839,13 +854,11 @@ with t_cierre:
                                 ot_str = normalizar_ot(row_r[ot_col])
                                 if not ot_str: continue
 
-                                # --- FILTRO ROBUSTO POR LEGAJO Y NOMBRE MMYHH ---
-                                if solo_mmyhh_cierre:
-                                    l_val = limpiar_legajo(row_r[legajo_col_cierre]) if legajo_col_cierre else None
-                                    n_val = str(row_r[nombre_col_cierre]).strip() if nombre_col_cierre and pd.notna(row_r[nombre_col_cierre]) else ""
-                                    if not es_personal_mmyhh(l_val, n_val):
-                                        continue
-                                # ------------------------------------------------
+                                l_val = limpiar_legajo(row_r[legajo_col_cierre]) if legajo_col_cierre else None
+                                n_val = str(row_r[nombre_col_cierre]).strip() if nombre_col_cierre and pd.notna(row_r[nombre_col_cierre]) else ""
+                                
+                                if not filtrar_por_contrato(l_val, n_val, contrato_sel_cierre):
+                                    continue
 
                                 sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
                                 fecha_val = str(row_r[fecha_col]).strip() if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan" else s_name
@@ -962,7 +975,8 @@ with t_cierre:
                             edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
                         out_cierre.seek(0)
                         
-                        nombre_archivo_cierre = f"Cierre_OTs_MMYHH_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx" if solo_mmyhh_cierre else f"Cierre_OTs_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx"
+                        sufijo_arch = f"_{contrato_sel_cierre}" if contrato_sel_cierre != "Todos los Contratos" else ""
+                        nombre_archivo_cierre = f"Cierre_OTs{sufijo_arch}_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx"
                         
                         st.download_button(
                             label="📥 Descargar Cierre de OTs (Excel)",
@@ -978,7 +992,7 @@ with t_cierre:
 # --- PESTAÑA: ⏱️ RECUENTO Y SELECCIÓN PERSONALIZADA DE HORAS ---
 with t_quincena:
     st.header("⏱️ Recuento y Selección Personalizada de Horas")
-    st.info("ℹ️ Seleccioná el rango de días y opcionalmente una **Planilla de Notificaciones de Drive** para clasificar las horas en Aprobadas, Pendientes y Rechazadas.")
+    st.info("ℹ️ Seleccioná el rango de días, el contrato a auditar y opcionalmente una **Planilla de Notificaciones de Drive**.")
     
     if carga_bytes:
         xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
@@ -1008,7 +1022,12 @@ with t_quincena:
 
             with col_q4:
                 st.write("")
-                solo_mmyhh = st.checkbox("👷‍♂️ Filtrar solo contrato MMYHH", key="chk_mmyhh")
+                contrato_sel_horas = st.radio(
+                    "🏗️ Filtrar Recuento por Contrato:",
+                    options=["Todos los Contratos", "MMYHH", "MOA"],
+                    horizontal=True,
+                    key="radio_contrato_horas"
+                )
                 btn_calc_q = st.button("📊 Calcular Resumen de Horas", type="primary")
 
             if btn_calc_q or st.session_state.get("ver_quincena", False):
@@ -1040,6 +1059,11 @@ with t_quincena:
                             for _, row in dfc_q.iterrows():
                                 leg_clean = limpiar_legajo(row[legajo_col])
                                 nom = str(row[nombre_col]).strip() if nombre_col and pd.notna(row[nombre_col]) else (f"Legajo {leg_clean}" if leg_clean else "Sin Nombre")
+                                
+                                # Aplicar filtro de contrato de forma estricta
+                                if not filtrar_por_contrato(leg_clean, nom, contrato_sel_horas):
+                                    continue
+                                
                                 hs = extraer_horas(row[trabajo_col])
                                 
                                 tipo_cat = "Hs. Normales"
@@ -1126,13 +1150,6 @@ with t_quincena:
                         df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
                         df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
 
-                        # --- FILTRO ROBUSTO POR CONTRATO MMYHH ---
-                        if solo_mmyhh:
-                            df_q_final = df_q_final[df_q_final.apply(lambda r: es_personal_mmyhh(r["Legajo"], r["Nombre"]), axis=1)]
-                            if df_q_final.empty:
-                                st.warning("No se encontraron registros para el personal del contrato MMYHH en este período.")
-                        # ----------------------------------------
-
                         kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
                         kpi1.metric("🟢 Hs. Aprobadas", f"{df_q_final['Hs. Aprobadas Total'].sum():.1f} hs")
                         kpi2.metric("⏳ Hs. Pendientes", f"{df_q_final['Hs. Pendientes Total'].sum():.1f} hs")
@@ -1159,7 +1176,8 @@ with t_quincena:
                         with pd.ExcelWriter(out_q, engine="openpyxl") as writer: df_q_final.to_excel(writer, index=False, sheet_name="Resumen Horas")
                         out_q.seek(0)
                         
-                        nombre_archivo_descarga = f"Resumen_MMYHH_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx" if solo_mmyhh else f"Resumen_Horas_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx"
+                        sufijo_arch_h = f"_{contrato_sel_horas}" if contrato_sel_horas != "Todos los Contratos" else ""
+                        nombre_archivo_descarga = f"Resumen_Horas{sufijo_arch_h}_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx"
                         st.download_button("📥 Descargar Resumen de Horas (Excel)", data=out_q, file_name=nombre_archivo_descarga, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     else: st.warning("No se encontraron registros de horas cargadas para el rango seleccionado.")
                 except Exception as e_q: st.error(f"Error al calcular: {e_q}")
