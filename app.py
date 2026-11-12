@@ -947,14 +947,12 @@ with t_quincena:
                                 nom = str(row[nombre_col]).strip() if nombre_col and pd.notna(row[nombre_col]) else (f"Legajo {leg_clean}" if leg_clean else "Sin Nombre")
                                 hs = extraer_horas(row[trabajo_col])
                                 
-                                # Determinar tipo de hora si existe la columna
                                 tipo_cat = "Hs. Normales"
                                 if tipo_col and pd.notna(row[tipo_col]):
                                     tipo_raw = str(row[tipo_col]).strip().upper()
                                     tipo_cat = "Hs. 50%" if "0.5" in tipo_raw or "50" in tipo_raw else "Hs. 100%" if "1" in tipo_raw or "100" in tipo_raw else "Hs. Normales"
 
-                                # Evaluar si la OT está Aprobada o Pendiente
-                                estado_ot = "APROBADA" # Por defecto si no hay columna de estado/notificación estricta
+                                estado_ot = "APROBADA"
                                 if estado_col_q and pd.notna(row[estado_col_q]):
                                     est_txt = str(row[estado_col_q]).strip().upper()
                                     if any(k in est_txt for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
@@ -978,16 +976,13 @@ with t_quincena:
 
                     df_q_all = pd.DataFrame(registros_quincena)
                     if not df_q_all.empty:
-                        # Pivot principal por Tipo de Hora y Estado de OT
                         piv_q = df_q_all.pivot_table(index=["Legajo", "Nombre"], columns=["Tipo", "EstadoOT"], values="Horas", aggfunc="sum", fill_value=0.0)
-                        piv_q.columns = [f"{col[0]} ({col[1])}" if isinstance(col, tuple) else str(col) for col in piv_q.columns]
+                        piv_q.columns = [f"{col[0]} ({col[1]})" if isinstance(col, tuple) else str(col) for col in piv_q.columns]
                         piv_q = piv_q.reset_index()
 
-                        # Asegurar columnas estándar necesarias
                         for col_h in ["Hs. Normales (APROBADA)", "Hs. Normales (PENDIENTE)", "Hs. 50% (APROBADA)", "Hs. 50% (PENDIENTE)", "Hs. 100% (APROBADA)", "Hs. 100% (PENDIENTE)"]:
                             if col_h not in piv_q.columns: piv_q[col_h] = 0.0
 
-                        # Totales agrupados
                         piv_q["Hs. Aprobadas Total"] = piv_q.get("Hs. Normales (APROBADA)", 0) + piv_q.get("Hs. 50% (APROBADA)", 0) + piv_q.get("Hs. 100% (APROBADA)", 0)
                         piv_q["Hs. Pendientes Total"] = piv_q.get("Hs. Normales (PENDIENTE)", 0) + piv_q.get("Hs. 50% (PENDIENTE)", 0) + piv_q.get("Hs. 100% (PENDIENTE)", 0)
                         piv_q["Total Hs. Cargadas"] = piv_q["Hs. Aprobadas Total"] + piv_q["Hs. Pendientes Total"]
