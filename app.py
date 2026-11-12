@@ -312,20 +312,37 @@ EXCLUIDOS_SECTOR = {
     60008266: ("Lascano, Luis Alejandro", "Coordinación"),
 }
 
-CONTRATO_MMYHH = [
-    "BUSTOS CELEDONIO JOSE",
-    "CARBALLO NASCHEL MANUEL",
-    "COLANDRE VALENTIN",
-    "CORTES RODRIGO MAXIMILIANO",
-    "CORTEZ CLAUDIO JOSE",
-    "DI VIRGILIO LEANDRO GERMAN",
-    "FARIAS RODRIGO DAMIAN",
-    "SAAVEDRA ALBERTO OSCAR",
-    "SIMEAND DIEGO EXEQUIEL",
-    "ZABALA JUAN CRUZ"
-]
-# Normalizamos la lista una vez para agilizar el filtrado luego
-MMYHH_NORMALIZADOS = [normalizar_texto(n) for n in CONTRATO_MMYHH]
+# 📋 LEGAJOS Y NOMBRES EXACTOS DEL CONTRATO MMYHH (Extraídos de tu captura)
+CONTRATO_MMYHH_LEGAJOS = {
+    60005508: "BUSTOS CELEDONIO JOSE",
+    60014119: "CARBALLO NASCHEL MANUEL",
+    60021316: "COLANDRE VALENTIN",
+    60016432: "CORTES RODRIGO MAXIMILIANO",
+    60019145: "CORTEZ CLAUDIO JOSE",
+    60014170: "DI VIRGILIO LEANDRO GERMAN",
+    60014126: "FARIAS RODRIGO DAMIAN",
+    50003371: "SAAVEDRA ALBERTO OSCAR",
+    60018676: "SIMEAND DIEGO EXEQUIEL",
+    60022855: "ZABALA JUAN CRUZ"
+}
+
+def es_personal_mmyhh(legajo_val, nombre_val):
+    """Filtro infalible: Valida primero por número de Legajo exacto y como respaldo por nombre."""
+    clean_l = limpiar_legajo(legajo_val)
+    if clean_l is not None and clean_l in CONTRATO_MMYHH_LEGAJOS:
+        return True
+    
+    if nombre_val and pd.notna(nombre_val):
+        n_norm = normalizar_texto(nombre_val)
+        for m_nom in CONTRATO_MMYHH_LEGAJOS.values():
+            m_norm = normalizar_texto(m_nom)
+            tokens_m = set(m_norm.split())
+            tokens_n = set(n_norm.split())
+            if len(tokens_m) > 0 and len(tokens_m.intersection(tokens_n)) >= min(2, len(tokens_m)):
+                return True
+            if m_norm in n_norm or n_norm in m_norm:
+                return True
+    return False
 
 def obtener_excel_nube(url):
     response = requests.get(url)
@@ -781,7 +798,6 @@ with t_cierre:
                     notif_mime_type = None
 
             st.write("")
-            # ---- NUEVO CHECKBOX MMYHH EN PESTAÑA CIERRE ----
             solo_mmyhh_cierre = st.checkbox("👷‍♂️ Filtrar OTs vinculadas al contrato MMYHH", key="chk_mmyhh_cierre")
             
             col_btn_ej, _ = st.columns([1, 3])
@@ -815,7 +831,7 @@ with t_cierre:
                         sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA", "ÁREA"])), None)
                         resp_col = next((c for c in dfc_ot.columns if "RESPONSABLE" in str(c).upper()), None)
                         
-                        # Buscamos la columna de nombres para poder filtrar por MMYHH si hace falta
+                        legajo_col_cierre = next((c for c in dfc_ot.columns if "LEGAJO" in str(c).upper()), None)
                         nombre_col_cierre = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), None)
 
                         if ot_col:
@@ -823,12 +839,13 @@ with t_cierre:
                                 ot_str = normalizar_ot(row_r[ot_col])
                                 if not ot_str: continue
 
-                                # --- FILTRO MMYHH (Ignoramos la fila si no pertenece a la lista) ---
+                                # --- FILTRO ROBUSTO POR LEGAJO Y NOMBRE MMYHH ---
                                 if solo_mmyhh_cierre:
-                                    nom_val = str(row_r[nombre_col_cierre]).strip() if nombre_col_cierre and pd.notna(row_r[nombre_col_cierre]) else ""
-                                    if normalizar_texto(nom_val) not in MMYHH_NORMALIZADOS:
+                                    l_val = limpiar_legajo(row_r[legajo_col_cierre]) if legajo_col_cierre else None
+                                    n_val = str(row_r[nombre_col_cierre]).strip() if nombre_col_cierre and pd.notna(row_r[nombre_col_cierre]) else ""
+                                    if not es_personal_mmyhh(l_val, n_val):
                                         continue
-                                # -------------------------------------------------------------------
+                                # ------------------------------------------------
 
                                 sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
                                 fecha_val = str(row_r[fecha_col]).strip() if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan" else s_name
@@ -945,7 +962,6 @@ with t_cierre:
                             edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
                         out_cierre.seek(0)
                         
-                        # Modificamos el nombre del archivo de descarga si se aplicó el filtro MMYHH
                         nombre_archivo_cierre = f"Cierre_OTs_MMYHH_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx" if solo_mmyhh_cierre else f"Cierre_OTs_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx"
                         
                         st.download_button(
@@ -1110,12 +1126,12 @@ with t_quincena:
                         df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
                         df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
 
-                        # --- FILTRO POR CONTRATO MMYHH ---
+                        # --- FILTRO ROBUSTO POR CONTRATO MMYHH ---
                         if solo_mmyhh:
-                            df_q_final = df_q_final[df_q_final["Nombre"].apply(lambda x: normalizar_texto(x) in MMYHH_NORMALIZADOS)]
+                            df_q_final = df_q_final[df_q_final.apply(lambda r: es_personal_mmyhh(r["Legajo"], r["Nombre"]), axis=1)]
                             if df_q_final.empty:
                                 st.warning("No se encontraron registros para el personal del contrato MMYHH en este período.")
-                        # ---------------------------------
+                        # ----------------------------------------
 
                         kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
                         kpi1.metric("🟢 Hs. Aprobadas", f"{df_q_final['Hs. Aprobadas Total'].sum():.1f} hs")
