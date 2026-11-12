@@ -323,12 +323,6 @@ CONTRATO_MMYHH_LEGAJOS = {
 }
 
 def filtrar_por_contrato(legajo_val, nombre_val, tipo_contrato):
-    """
-    Filtra los registros según el contrato seleccionado:
-    - 'Todos los Contratos': No filtra nada.
-    - 'MMYHH': Solo personal de MMYHH.
-    - 'MOA': Todo el personal EXCEPTO el de MMYHH (MOA puro).
-    """
     if tipo_contrato == "Todos los Contratos":
         return True
         
@@ -428,8 +422,8 @@ st.divider()
 
 MESES_NOMBRES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
 
-t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena, t_detalle = st.tabs([
-    "📥 Carga de Fichadas/RRHH", "📂 1. Carga", "⚙️ 2. Reglas", "📊 3. Reporte", "📋 Cierre de Período", "⏱️ 4. Horas y Período Personalizado", "🔍 5. Control Horarios y Fichadas"
+t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena, t_detalle, t_cert = st.tabs([
+    "📥 Carga de Fichadas/RRHH", "📂 1. Carga", "⚙️ 2. Reglas", "📊 3. Reporte", "📋 Cierre de Período", "⏱️ 4. Horas y Período Personalizado", "🔍 5. Control Horarios", "📁 6. Certificación de Horas"
 ])
 
 with t_rrhh:
@@ -1060,7 +1054,6 @@ with t_quincena:
                                 leg_clean = limpiar_legajo(row[legajo_col])
                                 nom = str(row[nombre_col]).strip() if nombre_col and pd.notna(row[nombre_col]) else (f"Legajo {leg_clean}" if leg_clean else "Sin Nombre")
                                 
-                                # Aplicar filtro de contrato de forma estricta
                                 if not filtrar_por_contrato(leg_clean, nom, contrato_sel_horas):
                                     continue
                                 
@@ -1344,3 +1337,101 @@ with t_detalle:
                 st.error(f"Error al procesar el detalle de horarios: {e_det}")
     else:
         st.info("Seleccioná un día y un archivo de fichada en la solapa '1. Carga' para ejecutar la auditoría.")
+
+# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS ---
+with t_cert:
+    st.header("📁 Certificación y Cruce Previo a Facturación")
+    st.info("ℹ️ Subí tu archivo Excel de certificación. La app leerá la **Columna Q** (Horas) y la **Columna S** ('X' = Certificadas, Vacío = No Certificadas) aplicando el filtro de contrato.")
+
+    if carga_bytes:
+        col_cert1, col_cert2 = st.columns([1, 1])
+        with col_cert1:
+            contrato_sel_cert = st.selectbox(
+                "🏗️ Seleccionar Contrato para Certificación:",
+                options=["MMYHH", "MOA"],
+                key="sel_contrato_cert"
+            )
+        with col_cert2:
+            archivo_cert_subido = st.file_uploader("📂 Subir Archivo Excel de Certificación", type=["xlsx", "xls", "csv"], key="uploader_cert")
+
+        if archivo_cert_subido is not None:
+            st.success("¡Archivo de certificación cargado con éxito!")
+            try:
+                df_cert_raw = pd.read_excel(archivo_cert_subido)
+                st.write("Vista previa del archivo cargado:")
+                st.dataframe(df_cert_raw.head(5), use_container_width=True)
+
+                if st.button("🚀 Procesar Horas Certificadas y No Certificadas", type="primary"):
+                    with st.spinner("Analizando columnas Q (Horas) y S (Certificación)..."):
+                        cols = df_cert_raw.columns
+                        col_horas_idx = 16 if len(cols) > 16 else None
+                        col_cert_idx = 18 if len(cols) > 18 else None
+                        col_legajo_cert = next((c for c in cols if "LEGAJO" in str(c).upper()), cols[1] if len(cols) > 1 else None)
+                        col_nombre_cert = next((c for c in cols if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), cols[2] if len(cols) > 2 else None)
+
+                        if col_horas_idx is None or col_cert_idx is None:
+                            st.warning("⚠️ El archivo parece tener menos de 19 columnas. Se requiere que la Columna Q contenga las horas y la Columna S la marca 'X'.")
+
+                        resultados_cert = []
+
+                        for _, row in df_cert_raw.iterrows():
+                            l_val = limpiar_legajo(row[col_legajo_cert]) if col_legajo_cert in df_cert_raw.columns else None
+                            n_val = str(row[col_nombre_cert]).strip() if col_nombre_cert and col_nombre_cert in df_cert_raw.columns and pd.notna(row[col_nombre_cert]) else ""
+
+                            if not filtrar_por_contrato(l_val, n_val, contrato_sel_cert):
+                                continue
+
+                            val_horas_raw = row.iloc[col_horas_idx] if col_horas_idx is not None and col_horas_idx < len(row) else 0
+                            hs = extraer_horas(val_horas_raw)
+
+                            val_cert_raw = str(row.iloc[col_cert_idx]).strip().upper() if col_cert_idx is not None and col_cert_idx < len(row) and pd.notna(row.iloc[col_cert_idx]) else ""
+                            es_certificado = True if "X" in val_cert_raw else False
+
+                            if l_val is not None or n_val:
+                                resultados_cert.append({
+                                    "Legajo": l_val if l_val else 0,
+                                    "Nombre": n_val,
+                                    "Horas Certificadas": hs if es_certificado else 0.0,
+                                    "Horas No Certificadas": hs if not es_certificado else 0.0,
+                                    "Total Horas": hs
+                                })
+
+                        df_cert_proc = pd.DataFrame(resultados_cert)
+
+                        if not df_cert_proc.empty:
+                            df_cert_resumen = df_cert_proc.groupby(["Legajo", "Nombre"], as_index=False)[
+                                ["Horas Certificadas", "Horas No Certificadas", "Total Horas"]
+                            ].sum()
+
+                            tot_cert = df_cert_resumen["Horas Certificadas"].sum()
+                            tot_no_cert = df_cert_resumen["Horas No Certificadas"].sum()
+                            tot_gral = df_cert_resumen["Total Horas"].sum()
+
+                            k_c1, k_c2, k_c3 = st.columns(3)
+                            k_c1.metric("🟢 Total Horas Certificadas", f"{tot_cert:.1f} hs")
+                            k_c2.metric("🟡 Total Horas No Certificadas", f"{tot_no_cert:.1f} hs")
+                            k_c3.metric("📊 Total General", f"{tot_gral:.1f} hs")
+
+                            st.divider()
+                            st.subheader(f"📋 Detalle de Certificación por Operario ({contrato_sel_cert})")
+                            st.dataframe(df_cert_resumen, use_container_width=True)
+
+                            out_cert_excel = io.BytesIO()
+                            with pd.ExcelWriter(out_cert_excel, engine="openpyxl") as writer:
+                                df_cert_resumen.to_excel(writer, index=False, sheet_name=f"Certificacion_{contrato_sel_cert}")
+                            out_cert_excel.seek(0)
+
+                            st.download_button(
+                                label=f"📥 Descargar Reporte de Certificación ({contrato_sel_cert})",
+                                data=out_cert_excel,
+                                file_name=f"Reporte_Certificacion_Detalle_{contrato_sel_cert}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        else:
+                            st.warning("No se encontraron registros para el contrato seleccionado en el archivo subido.")
+            except Exception as e_c:
+                st.error(f"Error al procesar el archivo de certificación: {e_c}")
+        else:
+            st.info("👆 Por favor, subí el archivo Excel de certificación para realizar el cálculo.")
+    else:
+        st.warning("Cargando conexión con las planillas...")
