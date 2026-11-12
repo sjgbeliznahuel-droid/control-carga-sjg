@@ -104,8 +104,6 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     fh.seek(0)
     return fh
 
-
-# 🛡️ CAPA 2 (ESTABLE Y OPTIMIZADA): Búsqueda acotada y segura
 def detectar_estructura_fichada(df_raw):
     header_row = 0 
     col_leg, col_nom, col_ing, col_egr, col_nov = -1, -1, -1, -1, -1
@@ -137,8 +135,6 @@ def detectar_estructura_fichada(df_raw):
 
     return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
 
-
-# 🛡️ CAPA 1 (OPTIMIZADA): Limpieza automática de filas y celdas "fantasmas"
 def cargar_dataframe_fichada(fh_bytes):
     xl = pd.ExcelFile(fh_bytes, engine="openpyxl")
     dfs = []
@@ -156,8 +152,6 @@ def cargar_dataframe_fichada(fh_bytes):
         return pd.concat(dfs, ignore_index=True)
     return pd.DataFrame()
 
-
-# 🛡️ CAPA 3: Extracción de números puros mediante Regex
 def convertir_a_horas_decimal(val):
     if pd.isna(val) or val == "": return None
     s_val = str(val).upper().replace("\xa0", " ").strip()
@@ -903,24 +897,45 @@ with t_cierre:
 # --- PESTAÑA: ⏱️ RECUENTO Y SELECCIÓN PERSONALIZADA DE HORAS ---
 with t_quincena:
     st.header("⏱️ Recuento y Selección Personalizada de Horas")
+    st.info("ℹ️ Seleccioná el rango de días y opcionalmente una **Planilla de Notificaciones de Drive** para clasificar las horas en Aprobadas, Pendientes y Rechazadas.")
+    
     if carga_bytes:
         xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
         dias_disponibles_map_q = {int(m.group(1)): s for s in xl_carga.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
         dias_ordenados_q = sorted(dias_disponibles_map_q.keys())
 
         if dias_ordenados_q:
-            col_q1, col_q2, col_q3 = st.columns([1, 1, 1.2])
-            with col_q1: desde_dia_q = st.selectbox("📅 Fecha Desde:", options=dias_ordenados_q, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map_q[d]})", index=0, key="desde_q")
+            col_q1, col_q2, col_q3, col_q4 = st.columns([1, 1, 1.2, 1.2])
+            with col_q1: desde_dia_q = st.selectbox("📅 Desde:", options=dias_ordenados_q, format_func=lambda d: f"Día {d:02d}", index=0, key="desde_q")
             with col_q2:
                 dias_hasta_opciones_q = [d for d in dias_ordenados_q if d >= desde_dia_q]
-                hasta_dia_q = st.selectbox("📅 Fecha Hasta:", options=dias_hasta_opciones_q, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map_q[d]})", index=len(dias_hasta_opciones_q)-1 if dias_hasta_opciones_q else 0, key="hasta_q")
+                hasta_dia_q = st.selectbox("📅 Hasta:", options=dias_hasta_opciones_q, format_func=lambda d: f"Día {d:02d}", index=len(dias_hasta_opciones_q)-1 if dias_hasta_opciones_q else 0, key="hasta_q")
+            
             with col_q3:
+                archivos_notif_q = obtener_archivos_notif_drive()
+                mapa_notif_files_q = {f['name']: f for f in archivos_notif_q}
+                opciones_notif_q = ["-- Sin notificaciones (Drive) --"] + list(mapa_notif_files_q.keys())
+                notif_sel_name_q = st.selectbox("📑 Planilla Notificaciones:", options=opciones_notif_q, key="notif_q_sel")
+                
+                if notif_sel_name_q != "-- Sin notificaciones (Drive) --":
+                    sel_file_info_q = mapa_notif_files_q.get(notif_sel_name_q, {})
+                    notif_file_id_q = sel_file_info_q.get('id')
+                    notif_mime_type_q = sel_file_info_q.get('mimeType')
+                else:
+                    notif_file_id_q = None
+                    notif_mime_type_q = None
+
+            with col_q4:
+                st.write("")
                 st.write("")
                 btn_calc_q = st.button("📊 Calcular Resumen de Horas", type="primary")
 
             if btn_calc_q or st.session_state.get("ver_quincena", False):
                 st.session_state["ver_quincena"] = True
                 try:
+                    # 1. Cargar mapeo de notificaciones de Drive si se seleccionó una planilla
+                    mapa_notif_drive_q, _ = obtener_notificaciones_drive(notif_file_id_q, notif_mime_type_q) if notif_file_id_q else ({}, {})
+
                     registros_quincena = []
 
                     for sheet in xl_carga.sheet_names:
@@ -952,18 +967,31 @@ with t_quincena:
                                     tipo_raw = str(row[tipo_col]).strip().upper()
                                     tipo_cat = "Hs. 50%" if "0.5" in tipo_raw or "50" in tipo_raw else "Hs. 100%" if "1" in tipo_raw or "100" in tipo_raw else "Hs. Normales"
 
-                                estado_ot = "APROBADA"
-                                if estado_col_q and pd.notna(row[estado_col_q]):
-                                    est_txt = str(row[estado_col_q]).strip().upper()
-                                    if any(k in est_txt for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
-                                        estado_ot = "PENDIENTE"
-                                    elif any(k in est_txt for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
+                                # Determinar estado de la OT cruzando con Drive si está disponible
+                                estado_ot = "APROBADA" # Por defecto
+                                ot_str = normalizar_ot(row[ot_col_q]) if ot_col_q and pd.notna(row[ot_col_q]) else ""
+
+                                if ot_str and ot_str in mapa_notif_drive_q:
+                                    est_drive = mapa_notif_drive_q[ot_str].get("estado", "").upper()
+                                    if any(k in est_drive for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
                                         estado_ot = "RECHAZADA"
-                                
-                                if notif_col_q and pd.notna(row[notif_col_q]):
-                                    f_notif = str(row[notif_col_q]).strip()
-                                    if f_notif and f_notif.lower() not in ["nan", "none", "", "-"]:
+                                    elif any(k in est_drive for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
+                                        estado_ot = "PENDIENTE"
+                                    elif any(k in est_drive for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]):
                                         estado_ot = "APROBADA"
+                                else:
+                                    # Leer estado local de Google Sheets si existe
+                                    if estado_col_q and pd.notna(row[estado_col_q]):
+                                        est_txt = str(row[estado_col_q]).strip().upper()
+                                        if any(k in est_txt for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
+                                            estado_ot = "PENDIENTE"
+                                        elif any(k in est_txt for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
+                                            estado_ot = "RECHAZADA"
+                                    
+                                    if notif_col_q and pd.notna(row[notif_col_q]):
+                                        f_notif = str(row[notif_col_q]).strip()
+                                        if f_notif and f_notif.lower() not in ["nan", "none", "", "-"]:
+                                            estado_ot = "APROBADA"
 
                                 if leg_clean is not None or nom != "Sin Nombre":
                                     registros_quincena.append({
@@ -980,12 +1008,17 @@ with t_quincena:
                         piv_q.columns = [f"{col[0]} ({col[1]})" if isinstance(col, tuple) else str(col) for col in piv_q.columns]
                         piv_q = piv_q.reset_index()
 
-                        for col_h in ["Hs. Normales (APROBADA)", "Hs. Normales (PENDIENTE)", "Hs. 50% (APROBADA)", "Hs. 50% (PENDIENTE)", "Hs. 100% (APROBADA)", "Hs. 100% (PENDIENTE)"]:
+                        for col_h in [
+                            "Hs. Normales (APROBADA)", "Hs. Normales (PENDIENTE)", "Hs. Normales (RECHAZADA)",
+                            "Hs. 50% (APROBADA)", "Hs. 50% (PENDIENTE)", "Hs. 50% (RECHAZADA)",
+                            "Hs. 100% (APROBADA)", "Hs. 100% (PENDIENTE)", "Hs. 100% (RECHAZADA)"
+                        ]:
                             if col_h not in piv_q.columns: piv_q[col_h] = 0.0
 
                         piv_q["Hs. Aprobadas Total"] = piv_q.get("Hs. Normales (APROBADA)", 0) + piv_q.get("Hs. 50% (APROBADA)", 0) + piv_q.get("Hs. 100% (APROBADA)", 0)
                         piv_q["Hs. Pendientes Total"] = piv_q.get("Hs. Normales (PENDIENTE)", 0) + piv_q.get("Hs. 50% (PENDIENTE)", 0) + piv_q.get("Hs. 100% (PENDIENTE)", 0)
-                        piv_q["Total Hs. Cargadas"] = piv_q["Hs. Aprobadas Total"] + piv_q["Hs. Pendientes Total"]
+                        piv_q["Hs. Rechazadas Total"] = piv_q.get("Hs. Normales (RECHAZADA)", 0) + piv_q.get("Hs. 50% (RECHAZADA)", 0) + piv_q.get("Hs. 100% (RECHAZADA)", 0)
+                        piv_q["Total Hs. Cargadas"] = piv_q["Hs. Aprobadas Total"] + piv_q["Hs. Pendientes Total"] + piv_q["Hs. Rechazadas Total"]
 
                         fichadas_horas_dict = {}
                         with st.spinner("Analizando fichadas en Google Drive..."):
@@ -1021,14 +1054,15 @@ with t_quincena:
                         df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
                         df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
 
-                        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-                        kpi1.metric("🟢 Total Hs. Aprobadas", f"{df_q_final['Hs. Aprobadas Total'].sum():.1f} hs")
-                        kpi2.metric("⏳ Total Hs. Pendientes", f"{df_q_final['Hs. Pendientes Total'].sum():.1f} hs")
-                        kpi3.metric("⏱️ Total Hs. Cargadas", f"{df_q_final['Total Hs. Cargadas'].sum():.1f} hs")
-                        kpi4.metric("⏰ Total Hs. Fichadas (Reloj)", f"{df_q_final['Total Hs. Fichadas (Reloj)'].sum():.1f} hs")
+                        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+                        kpi1.metric("🟢 Hs. Aprobadas", f"{df_q_final['Hs. Aprobadas Total'].sum():.1f} hs")
+                        kpi2.metric("⏳ Hs. Pendientes", f"{df_q_final['Hs. Pendientes Total'].sum():.1f} hs")
+                        kpi3.metric("🔴 Hs. Rechazadas", f"{df_q_final['Hs. Rechazadas Total'].sum():.1f} hs")
+                        kpi4.metric("⏱️ Total Cargadas", f"{df_q_final['Total Hs. Cargadas'].sum():.1f} hs")
+                        kpi5.metric("⏰ Total Fichadas", f"{df_q_final['Total Hs. Fichadas (Reloj)'].sum():.1f} hs")
                         
                         st.divider()
-                        columnas_mostrar = ["Legajo", "Nombre", "Hs. Aprobadas Total", "Hs. Pendientes Total", "Total Hs. Cargadas", "Total Hs. Fichadas (Reloj)", "Diferencia (Cargado vs Fichado)"]
+                        columnas_mostrar = ["Legajo", "Nombre", "Hs. Aprobadas Total", "Hs. Pendientes Total", "Hs. Rechazadas Total", "Total Hs. Cargadas", "Total Hs. Fichadas (Reloj)", "Diferencia (Cargado vs Fichado)"]
                         st_q_styled = df_q_final[columnas_mostrar].style
                         def func_color_q(val):
                             if val > 0: return "background-color: #FFEB9C; color: #856404;"
