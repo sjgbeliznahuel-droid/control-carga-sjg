@@ -32,6 +32,8 @@ URL_DESCARGA_SHEET = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxZOKYHQHzLR-gZionm3Ub1z8Rlrz5l6AtR1D8gLKKIeAqhSGMf62vMfsa4F2s1gcweFA/exec"
 DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
 NOTIF_FOLDER_ID = "1GJGTwWRwmrWT-Zgkp4nQcWmm3kk-eR8y"
+# 📂 ID de la carpeta de Certificación en Google Drive (reemplazalo si creaste una nueva carpeta exclusiva)
+CERT_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-" 
 
 @st.cache_resource
 def conectar_drive():
@@ -60,6 +62,24 @@ def obtener_archivos_drive():
     query = f"'{DRIVE_FOLDER_ID}' in parents and trashed=false"
     resultados = drive_service.files().list(q=query, orderBy="name desc", pageSize=1000, fields="files(id, name)").execute()
     return resultados.get('files', [])
+
+def obtener_archivos_cert_drive():
+    try:
+        query = f"'{CERT_FOLDER_ID}' in parents and trashed=false"
+        resultados = drive_service.files().list(
+            q=query, orderBy="modifiedTime desc", pageSize=1000, fields="files(id, name, mimeType)"
+        ).execute()
+        archivos = resultados.get('files', [])
+        archivos_validos = []
+        for f in archivos:
+            nombre = f.get('name', '')
+            mime = f.get('mimeType', '')
+            if nombre.lower().endswith(('.xlsx', '.xltx', '.csv')) or mime == 'application/vnd.google-apps.spreadsheet':
+                archivos_validos.append(f)
+        return archivos_validos
+    except Exception as e:
+        st.error(f"⚠️ Error de acceso a la carpeta de Certificación en Drive: {e}")
+        return []
 
 def obtener_archivos_notif_drive():
     try:
@@ -1341,7 +1361,7 @@ with t_detalle:
 # --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS ---
 with t_cert:
     st.header("📁 Certificación y Cruce Previo a Facturación")
-    st.info("ℹ️ Subí tu archivo Excel de certificación. La app leerá la **Columna Q** (Horas) y la **Columna S** ('X' = Certificadas, Vacío = No Certificadas) aplicando el filtro de contrato.")
+    st.info("ℹ️ Seleccioná el archivo de certificación alojado en tu carpeta de Google Drive. La app leerá la **Columna Q** (Horas) y la **Columna S** ('X' = Certificadas, Vacío = No Certificadas) aplicando el filtro de contrato.")
 
     if carga_bytes:
         col_cert1, col_cert2 = st.columns([1, 1])
@@ -1352,17 +1372,26 @@ with t_cert:
                 key="sel_contrato_cert"
             )
         with col_cert2:
-            archivo_cert_subido = st.file_uploader("📂 Subir Archivo Excel de Certificación", type=["xlsx", "xls", "csv"], key="uploader_cert")
+            archivos_cert_drive = obtener_archivos_cert_drive()
+            mapa_cert_files = {f['name']: f for f in archivos_cert_drive}
+            opciones_cert = ["-- Seleccionar archivo de certificación --"] + list(mapa_cert_files.keys())
+            cert_sel_name = st.selectbox("📂 Archivo de Certificación (Drive):", options=opciones_cert, key="sel_cert_drive_file")
 
-        if archivo_cert_subido is not None:
-            st.success("¡Archivo de certificación cargado con éxito!")
-            try:
-                df_cert_raw = pd.read_excel(archivo_cert_subido)
-                st.write("Vista previa del archivo cargado:")
-                st.dataframe(df_cert_raw.head(5), use_container_width=True)
+            if cert_sel_name != "-- Seleccionar archivo de certificación --":
+                selected_cert_info = mapa_cert_files.get(cert_sel_name, {})
+                cert_file_id = selected_cert_info.get('id')
+                cert_mime_type = selected_cert_info.get('mimeType')
+            else:
+                cert_file_id = None
+                cert_mime_type = None
 
-                if st.button("🚀 Procesar Horas Certificadas y No Certificadas", type="primary"):
-                    with st.spinner("Analizando columnas Q (Horas) y S (Certificación)..."):
+        if cert_file_id is not None:
+            if st.button("🚀 Procesar Horas Certificadas y No Certificadas", type="primary"):
+                with st.spinner("Descargando y analizando columnas Q (Horas) y S (Certificación) desde Drive..."):
+                    try:
+                        fh_cert = descargar_archivo_notif_drive(cert_file_id, cert_mime_type)
+                        df_cert_raw = pd.read_excel(fh_cert)
+                        
                         cols = df_cert_raw.columns
                         col_horas_idx = 16 if len(cols) > 16 else None
                         col_cert_idx = 18 if len(cols) > 18 else None
@@ -1428,10 +1457,10 @@ with t_cert:
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         else:
-                            st.warning("No se encontraron registros para el contrato seleccionado en el archivo subido.")
-            except Exception as e_c:
-                st.error(f"Error al procesar el archivo de certificación: {e_c}")
+                            st.warning("No se encontraron registros para el contrato seleccionado en el archivo de Drive.")
+                    except Exception as e_c:
+                        st.error(f"Error al procesar el archivo de certificación desde Drive: {e_c}")
         else:
-            st.info("👆 Por favor, subí el archivo Excel de certificación para realizar el cálculo.")
+            st.info("👆 Seleccioná un archivo de la carpeta de certificación en Google Drive para comenzar el análisis.")
     else:
         st.warning("Cargando conexión con las planillas...")
