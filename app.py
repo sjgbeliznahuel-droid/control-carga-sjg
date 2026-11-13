@@ -1361,33 +1361,38 @@ with t_detalle:
 # --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS ---
 with t_cert:
     st.header("📁 Certificación y Cruce Previo a Facturación")
-    st.info("ℹ️ Seleccioná el archivo de certificación alojado en tu carpeta de Google Drive. La app leerá la **Columna Q** (Horas) y la **Columna S** ('X' = Certificadas, Vacío = No Certificadas) aplicando el filtro de contrato.")
+    st.info("ℹ️ Seleccioná el archivo de certificación alojado en tu carpeta de Google Drive. La app leerá la **Columna Q** (Horas) y la **Columna S** ('X' = Certificadas, Vacío = No Certificadas) aplicando el filtro de contrato y el rango de fechas.")
 
     if carga_bytes:
-        col_cert1, col_cert2 = st.columns([1, 1])
+        col_cert1, col_cert2, col_cert3 = st.columns([1.2, 1.2, 1.2])
         with col_cert1:
             contrato_sel_cert = st.selectbox(
-                "🏗️ Seleccionar Contrato para Certificación:",
+                "🏗️ Seleccionar Contrato:",
                 options=["MMYHH", "MOA"],
                 key="sel_contrato_cert"
             )
         with col_cert2:
-            archivos_cert_drive = obtener_archivos_cert_drive()
-            mapa_cert_files = {f['name']: f for f in archivos_cert_drive}
-            opciones_cert = ["-- Seleccionar archivo de certificación --"] + list(mapa_cert_files.keys())
-            cert_sel_name = st.selectbox("📂 Archivo de Certificación (Drive):", options=opciones_cert, key="sel_cert_drive_file")
+            # Selectores de Fecha Desde / Hasta (del 1 al 31)
+            dia_desde_cert = st.selectbox("📅 Día Desde:", options=list(range(1, 32)), index=0, key="sel_dia_desde_cert")
+        with col_cert3:
+            dia_hasta_cert = st.selectbox("📅 Día Hasta:", options=list(range(1, 32)), index=30, key="sel_dia_hasta_cert")
 
-            if cert_sel_name != "-- Seleccionar archivo de certificación --":
-                selected_cert_info = mapa_cert_files.get(cert_sel_name, {})
-                cert_file_id = selected_cert_info.get('id')
-                cert_mime_type = selected_cert_info.get('mimeType')
-            else:
-                cert_file_id = None
-                cert_mime_type = None
+        archivos_cert_drive = obtener_archivos_cert_drive()
+        mapa_cert_files = {f['name']: f for f in archivos_cert_drive}
+        opciones_cert = ["-- Seleccionar archivo de certificación --"] + list(mapa_cert_files.keys())
+        cert_sel_name = st.selectbox("📂 Archivo de Certificación (Drive):", options=opciones_cert, key="sel_cert_drive_file")
+
+        if cert_sel_name != "-- Seleccionar archivo de certificación --":
+            selected_cert_info = mapa_cert_files.get(cert_sel_name, {})
+            cert_file_id = selected_cert_info.get('id')
+            cert_mime_type = selected_cert_info.get('mimeType')
+        else:
+            cert_file_id = None
+            cert_mime_type = None
 
         if cert_file_id is not None:
             if st.button("🚀 Procesar Horas Certificadas y No Certificadas", type="primary"):
-                with st.spinner("Descargando y analizando columnas Q (Horas) y S (Certificación) desde Drive..."):
+                with st.spinner("Descargando y analizando columnas Q (Horas), S (Certificación) y fechas desde Drive..."):
                     try:
                         fh_cert = descargar_archivo_notif_drive(cert_file_id, cert_mime_type)
                         df_cert_raw = pd.read_excel(fh_cert)
@@ -1395,6 +1400,9 @@ with t_cert:
                         cols = df_cert_raw.columns
                         col_horas_idx = 16 if len(cols) > 16 else None
                         col_cert_idx = 18 if len(cols) > 18 else None
+                        
+                        # Buscar columna de fecha en el archivo de certificación (ej: columna con fechas o día)
+                        col_fecha_cert = next((c for c in cols if any(k in str(c).upper() for k in ["FECHA", "DIA", "DÍA"])), cols[3] if len(cols) > 3 else None)
                         col_legajo_cert = next((c for c in cols if "LEGAJO" in str(c).upper()), cols[1] if len(cols) > 1 else None)
                         col_nombre_cert = next((c for c in cols if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), cols[2] if len(cols) > 2 else None)
 
@@ -1404,6 +1412,13 @@ with t_cert:
                         resultados_cert = []
 
                         for _, row in df_cert_raw.iterrows():
+                            # Filtrado opcional por fecha si la fila tiene columna de fecha
+                            if col_fecha_cert and col_fecha_cert in df_cert_raw.columns and pd.notna(row[col_fecha_cert]):
+                                d_val, _ = obtener_dia_mes(row[col_fecha_cert])
+                                if d_val is not None:
+                                    if not (dia_desde_cert <= d_val <= dia_hasta_cert):
+                                        continue
+
                             l_val = limpiar_legajo(row[col_legajo_cert]) if col_legajo_cert in df_cert_raw.columns else None
                             n_val = str(row[col_nombre_cert]).strip() if col_nombre_cert and col_nombre_cert in df_cert_raw.columns and pd.notna(row[col_nombre_cert]) else ""
 
@@ -1442,7 +1457,7 @@ with t_cert:
                             k_c3.metric("📊 Total General", f"{tot_gral:.1f} hs")
 
                             st.divider()
-                            st.subheader(f"📋 Detalle de Certificación por Operario ({contrato_sel_cert})")
+                            st.subheader(f"📋 Detalle de Certificación por Operario ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})")
                             st.dataframe(df_cert_resumen, use_container_width=True)
 
                             out_cert_excel = io.BytesIO()
@@ -1451,13 +1466,13 @@ with t_cert:
                             out_cert_excel.seek(0)
 
                             st.download_button(
-                                label=f"📥 Descargar Reporte de Certificación ({contrato_sel_cert})",
+                                label=f"📥 Descargar Reporte de Certificación ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})",
                                 data=out_cert_excel,
-                                file_name=f"Reporte_Certificacion_Detalle_{contrato_sel_cert}.xlsx",
+                                file_name=f"Reporte_Certificacion_{contrato_sel_cert}_Dias_{dia_desde_cert:02d}_al_{dia_hasta_cert:02d}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         else:
-                            st.warning("No se encontraron registros para el contrato seleccionado en el archivo de Drive.")
+                            st.warning("No se encontraron registros para los filtros seleccionados en el archivo de Drive.")
                     except Exception as e_c:
                         st.error(f"Error al procesar el archivo de certificación desde Drive: {e_c}")
         else:
