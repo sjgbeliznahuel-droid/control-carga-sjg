@@ -86,7 +86,6 @@ def obtener_archivos_notif_drive():
         resultados = drive_service.files().list(
             q=query, orderBy="modifiedTime desc", pageSize=1000, fields="files(id, name, mimeType)"
         ).execute()
-        
         archivos = resultados.get('files', [])
         archivos_validos = []
         for f in archivos:
@@ -114,7 +113,6 @@ def descargar_archivo_notif_drive(file_id, mime_type):
         request = drive_service.files().export_media(fileId=file_id, mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     else:
         request = drive_service.files().get_media(fileId=file_id)
-        
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     terminado = False
@@ -126,7 +124,6 @@ def descargar_archivo_notif_drive(file_id, mime_type):
 def detectar_estructura_fichada(df_raw):
     header_row = 0 
     col_leg, col_nom, col_ing, col_egr, col_nov = -1, -1, -1, -1, -1
-
     if df_raw.empty:
         return header_row, 2, 3, 6, 7, 12
 
@@ -151,7 +148,6 @@ def detectar_estructura_fichada(df_raw):
     if col_ing == -1: col_ing = 6   
     if col_egr == -1: col_egr = 7   
     if col_nov == -1: col_nov = 12  
-
     return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
 
 def cargar_dataframe_fichada(fh_bytes):
@@ -1061,10 +1057,10 @@ with t_detalle:
                 st.dataframe(pd.DataFrame(filas_detalle), use_container_width=True)
             except Exception as e_det: st.error(f"Error: {e_det}")
 
-# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS (CRUCE DESDE/HASTA + CONTRATO + ESTADOS) ---
+# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS (CRUCE DESDE/HASTA + CONTRATO + PENDIENTE DE CARGA) ---
 with t_cert:
     st.header("📁 Certificación y Cruce Previo a Facturación")
-    st.info("ℹ️ Seleccioná el archivo de certificación en Drive. La app leerá las horas, el estado de certificación (Columna S) y el rango de fechas para cruzar con las planillas de Google Sheets.")
+    st.info("ℹ️ Seleccioná el archivo de certificación en Drive. La app leerá las horas, la certificación (Columna S), el rango de fechas y cruzará contra Google Sheets para mostrarte las **Horas Pendientes de Carga / Fuera de Drive**.")
 
     if carga_bytes:
         col_cert1, col_cert2, col_cert3 = st.columns([1.2, 1.2, 1.2])
@@ -1102,7 +1098,6 @@ with t_cert:
                         xl_sheets = pd.ExcelFile(io.BytesIO(carga_bytes))
                         dias_map_cert = {int(m.group(1)): s for s in xl_sheets.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
                         
-                        # Recopilar registros de Google Sheets dentro del rango [dia_desde_cert, dia_hasta_cert]
                         registros_sheets = []
                         for d_num, s_name in dias_map_cert.items():
                             if dia_desde_cert <= d_num <= dia_hasta_cert:
@@ -1113,26 +1108,21 @@ with t_cert:
                                 l_col = next((c for c in df_s.columns if "LEGAJO" in str(c).upper()), None)
                                 n_col = next((c for c in df_s.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE"])), None)
                                 t_col = next((c for c in df_s.columns if "TRABAJO" in str(c).upper()), None)
-                                ot_col_s = next((c for c in df_s.columns if "OT" in str(c).upper()), None)
-                                est_col_s = next((c for c in df_s.columns if any(k in str(c).upper() for k in ["ESTADO", "STATUS"])), None)
 
                                 if l_col and t_col:
                                     for _, r in df_s.iterrows():
                                         l_val = limpiar_legajo(r[l_col])
                                         n_val = str(r[n_col]).strip() if n_col and pd.notna(r[n_col]) else ""
                                         if not filtrar_por_contrato(l_val, n_val, contrato_sel_cert): continue
-                                        
                                         hs_hojas = extraer_horas(r[t_col])
-                                        est_ot = str(r[est_col_s]).strip().upper() if est_col_s and pd.notna(r[est_col_s]) else "APROBADA"
-                                        
-                                        registros_sheets.append({
-                                            "Legajo": l_val if l_val else 0,
-                                            "Nombre": n_val,
-                                            "Horas": hs_hojas,
-                                            "EstadoOT": "PENDIENTE" if any(k in est_ot for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA"]) else "APROBADA"
-                                        })
+                                        if l_val is not None:
+                                            registros_sheets.append({"Legajo": l_val, "Nombre": n_val, "HorasSheets": hs_hojas})
 
-                        df_sheets_agrupado = pd.DataFrame(registros_sheets)
+                        df_sheets_proc = pd.DataFrame(registros_sheets)
+                        df_sheets_agrupado = pd.DataFrame(columns=["Legajo", "Nombre", "Total Horas Sheets"])
+                        if not df_sheets_proc.empty:
+                            df_sheets_agrupado = df_sheets_proc.groupby(["Legajo", "Nombre"], as_index=False)["HorasSheets"].sum()
+                            df_sheets_agrupado.rename(columns={"HorasSheets": "Total Horas Sheets"}, inplace=True)
 
                         # 3. Procesar archivo de Drive con filtro de fecha
                         resultados_cert = []
@@ -1160,48 +1150,49 @@ with t_cert:
                                     "Nombre": n_val,
                                     "Horas Certificadas": hs if es_certificado else 0.0,
                                     "Horas No Certificadas": hs if not es_certificado else 0.0,
-                                    "Total Horas": hs
+                                    "Total Horas Drive": hs
                                 })
 
                         df_cert_proc = pd.DataFrame(resultados_cert)
 
-                        if not df_cert_proc.empty:
+                        if not df_cert_proc.empty or not df_sheets_agrupado.empty:
                             df_cert_resumen = df_cert_proc.groupby(["Legajo", "Nombre"], as_index=False)[
-                                ["Horas Certificadas", "Horas No Certificadas", "Total Horas"]
-                            ].sum()
+                                ["Horas Certificadas", "Horas No Certificadas", "Total Horas Drive"]
+                            ].sum() if not df_cert_proc.empty else pd.DataFrame(columns=["Legajo", "Nombre", "Horas Certificadas", "Horas No Certificadas", "Total Horas Drive"])
 
-                            # Cruzar con pendientes de Google Sheets si existen registros
-                            if not df_sheets_agrupado.empty:
-                                df_pendientes = df_sheets_agrupado[df_sheets_agrupado["EstadoOT"] == "PENDIENTE"].groupby(["Legajo"], as_index=False)["Horas"].sum()
-                                df_pendientes.rename(columns={"Horas": "Horas Pendientes"}, inplace=True)
-                                df_cert_resumen = pd.merge(df_cert_resumen, df_pendientes, on="Legajo", how="left").fillna({"Horas Pendientes": 0.0})
-                            else:
-                                df_cert_resumen["Horas Pendientes"] = 0.0
+                            # Realizar el merge completo con Google Sheets para capturar operarios de ambos lados
+                            df_final_cruce = pd.merge(df_sheets_agrupado, df_cert_resumen, on=["Legajo", "Nombre"], how="outer").fillna(0.0)
+                            
+                            # Calcular la brecha: Horas en Google Sheets menos lo que figura en Drive (Certificadas + No Certificadas)
+                            df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"] = df_final_cruce["Total Horas Sheets"] - (df_final_cruce["Horas Certificadas"] + df_final_cruce["Horas No Certificadas"])
+                            df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"] = df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"].apply(lambda x: max(0.0, x))
 
-                            tot_cert = df_cert_resumen["Horas Certificadas"].sum()
-                            tot_no_cert = df_cert_resumen["Horas No Certificadas"].sum()
-                            tot_pend = df_cert_resumen["Horas Pendientes"].sum()
-                            tot_gral = df_cert_resumen["Total Horas"].sum()
+                            tot_cert = df_final_cruce["Horas Certificadas"].sum()
+                            tot_no_cert = df_final_cruce["Horas No Certificadas"].sum()
+                            tot_pendiente_carga = df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"].sum()
+                            tot_gral_sheets = df_final_cruce["Total Horas Sheets"].sum()
 
                             k_c1, k_c2, k_c3, k_c4 = st.columns(4)
                             k_c1.metric("🟢 Certificadas", f"{tot_cert:.1f} hs")
                             k_c2.metric("🟡 No Certificadas", f"{tot_no_cert:.1f} hs")
-                            k_c3.metric("⏳ Pendientes de Aprob.", f"{tot_pend:.1f} hs")
-                            k_c4.metric("📊 Total General", f"{tot_gral:.1f} hs")
+                            k_c3.metric("⚠️ Pendiente de Carga", f"{tot_pendiente_carga:.1f} hs")
+                            k_c4.metric("📊 Total Google Sheets", f"{tot_gral_sheets:.1f} hs")
 
                             st.divider()
-                            st.subheader(f"📋 Detalle de Certificación ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})")
-                            st.dataframe(df_cert_resumen, use_container_width=True)
+                            st.subheader(f"📋 Cruce y Auditoría de Certificación ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})")
+                            
+                            columnas_vista = ["Legajo", "Nombre", "Total Horas Sheets", "Horas Certificadas", "Horas No Certificadas", "⚠️ Pendiente de Carga / Fuera de Drive"]
+                            st.dataframe(df_final_cruce[columnas_vista], use_container_width=True)
 
                             out_cert_excel = io.BytesIO()
                             with pd.ExcelWriter(out_cert_excel, engine="openpyxl") as writer:
-                                df_cert_resumen.to_excel(writer, index=False, sheet_name=f"Certificacion_{contrato_sel_cert}")
+                                df_final_cruce[columnas_vista].to_excel(writer, index=False, sheet_name=f"Certificacion_{contrato_sel_cert}")
                             out_cert_excel.seek(0)
 
                             st.download_button(
-                                label=f"📥 Descargar Reporte Completo ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})",
+                                label=f"📥 Descargar Reporte de Auditoría ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})",
                                 data=out_cert_excel,
-                                file_name=f"Reporte_Certificacion_Completo_{contrato_sel_cert}_Dias_{dia_desde_cert:02d}_al_{dia_hasta_cert:02d}.xlsx",
+                                file_name=f"Reporte_Auditoria_Certificacion_{contrato_sel_cert}_Dias_{dia_desde_cert:02d}_al_{dia_hasta_cert:02d}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         else:
