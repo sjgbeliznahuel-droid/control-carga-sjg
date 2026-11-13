@@ -382,10 +382,7 @@ with t_carga:
             archivos_drive = obtener_archivos_drive()
             archivos_guardados = [f['name'] for f in archivos_drive if f['name'].lower().endswith(('.xlsx', '.xltx'))]
             mapa_archivos = {f['name']: f['id'] for f in archivos_drive}
-            if archivos_guardados:
-                af_selected = archivos_guardados[0]
-            else:
-                af_selected = None
+            af_selected = archivos_guardados[0] if archivos_guardados else None
         except Exception:
             af_selected = None
     with c1:
@@ -416,10 +413,10 @@ with t_quincena:
 with t_detalle:
     st.info("Control Detallado.")
 
-# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS (CRUCE REVISADO Y ASEGURADO PARA MOA) ---
+# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS (CRUCE ROBUSTO POR DICCIONARIO) ---
 with t_cert:
     st.header("📁 Certificación y Cruce Previo a Facturación (MOA vs Drive)")
-    st.info("ℹ️ Este módulo toma el archivo de certificación de Drive (Col Q: Horas, Col S: Certificación 'X'), lee las planillas diarias de Google Sheets para el contrato **MOA** y el rango de fechas seleccionado, y calcula las horas certificadas, no certificadas y las **Pendientes de Carga**.")
+    st.info("ℹ️ Este módulo compara las horas de Google Sheets (MOA) con el archivo de certificación de Drive (Col Q: Horas, Col S: Certificación 'X') mediante un cruce por Legajo y Nombre, restando automáticamente las certificadas y no certificadas para dar con el limpio de **Pendientes de Carga**.")
 
     if carga_bytes:
         col_cert1, col_cert2, col_cert3 = st.columns([1.2, 1.2, 1.2])
@@ -473,7 +470,6 @@ with t_cert:
                                         l_val = limpiar_legajo(r[l_col])
                                         n_val = str(r[n_col]).strip() if n_col and pd.notna(r[n_col]) else ""
                                         
-                                        # Aplicar el filtro estricto de contrato (MOA)
                                         if not filtrar_por_contrato(l_val, n_val, contrato_sel_cert): 
                                             continue
                                             
@@ -505,7 +501,6 @@ with t_cert:
                             l_val = limpiar_legajo(row[col_legajo_cert]) if col_legajo_cert in df_cert_raw.columns else None
                             n_val = str(row[col_nombre_cert]).strip() if col_nombre_cert and col_nombre_cert in df_cert_raw.columns and pd.notna(row[col_nombre_cert]) else ""
 
-                            # Aplicar el filtro estricto de contrato (MOA)
                             if not filtrar_por_contrato(l_val, n_val, contrato_sel_cert):
                                 continue
 
@@ -531,26 +526,50 @@ with t_cert:
                                 ["Horas Certificadas", "Horas No Certificadas", "Total Horas Drive"]
                             ].sum()
 
-                        # 4. Cruce robusto por Legajo y Nombre Normalizado
-                        if not df_sheets_agrupado.empty and not df_cert_resumen.empty:
-                            df_final_cruce = pd.merge(df_sheets_agrupado, df_cert_resumen, on=["Legajo", "Nombre_Norm"], how="outer", suffixes=('', '_y')).fillna(0.0)
-                            if "Nombre_y" in df_final_cruce.columns:
-                                df_final_cruce["Nombre"] = df_final_cruce["Nombre"].replace("", pd.NA).fillna(df_final_cruce["Nombre_y"])
-                                df_final_cruce.drop(columns=["Nombre_y"], inplace=True, errors="ignore")
-                        elif not df_sheets_agrupado.empty:
-                            df_final_cruce = df_sheets_agrupado.copy()
-                            df_final_cruce["Horas Certificadas"] = 0.0
-                            df_final_cruce["Horas No Certificadas"] = 0.0
-                            df_final_cruce["Total Horas Drive"] = 0.0
-                        else:
-                            df_final_cruce = df_cert_resumen.copy()
-                            df_final_cruce["Total Horas Sheets"] = 0.0
+                        # 4. Cruce robusto mediante diccionarios de búsqueda (Legajo y Nombre)
+                        cert_dict_legajo = {}
+                        cert_dict_nombre = {}
+                        for _, r_c in df_cert_resumen.iterrows():
+                            leg_c = int(r_c["Legajo"]) if pd.notna(r_c["Legajo"]) else 0
+                            nom_c_norm = str(r_c["Nombre_Norm"]).strip()
+                            h_cert = r_c["Horas Certificadas"]
+                            h_nocert = r_c["Horas No Certificadas"]
+                            if leg_c > 0:
+                                cert_dict_legajo[leg_c] = {"Certificadas": h_cert, "NoCertificadas": h_nocert}
+                            if nom_c_norm:
+                                cert_dict_nombre[nom_c_norm] = {"Certificadas": h_cert, "NoCertificadas": h_nocert}
+
+                        filas_cruce = []
+                        for _, r_s in df_sheets_agrupado.iterrows():
+                            leg_s = int(r_s["Legajo"]) if pd.notna(r_s["Legajo"]) else 0
+                            nom_s_norm = str(r_s["Nombre_Norm"]).strip()
+                            nom_s_orig = r_s["Nombre"]
+                            tot_sheets = r_s["Total Horas Sheets"]
+
+                            h_cert = 0.0
+                            h_nocert = 0.0
+
+                            if leg_s > 0 and leg_s in cert_dict_legajo:
+                                h_cert = cert_dict_legajo[leg_s]["Certificadas"]
+                                h_nocert = cert_dict_legajo[leg_s]["NoCertificadas"]
+                            elif nom_s_norm in cert_dict_nombre:
+                                h_cert = cert_dict_nombre[nom_s_norm]["Certificadas"]
+                                h_nocert = cert_dict_nombre[nom_s_norm]["NoCertificadas"]
+
+                            pend_carga = max(0.0, tot_sheets - (h_cert + h_nocert))
+
+                            filas_cruce.append({
+                                "Legajo": leg_s if leg_s > 0 else "SIN LEGAJO",
+                                "Nombre": nom_s_orig,
+                                "Total Horas Sheets": tot_sheets,
+                                "Horas Certificadas": h_cert,
+                                "Horas No Certificadas": h_nocert,
+                                "⚠️ Pendiente de Carga / Fuera de Drive": pend_carga
+                            })
+
+                        df_final_cruce = pd.DataFrame(filas_cruce)
 
                         if not df_final_cruce.empty:
-                            # Calcular la brecha: Horas en Google Sheets menos lo que figura en Drive (Certificadas + No Certificadas)
-                            df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"] = df_final_cruce["Total Horas Sheets"] - (df_final_cruce["Horas Certificadas"] + df_final_cruce["Horas No Certificadas"])
-                            df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"] = df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"].apply(lambda x: max(0.0, x))
-
                             tot_cert = df_final_cruce["Horas Certificadas"].sum()
                             tot_no_cert = df_final_cruce["Horas No Certificadas"].sum()
                             tot_pendiente_carga = df_final_cruce["⚠️ Pendiente de Carga / Fuera de Drive"].sum()
@@ -566,11 +585,11 @@ with t_cert:
                             st.subheader(f"📋 Auditoría de Certificación y Carga ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})")
                             
                             columnas_vista = ["Legajo", "Nombre", "Total Horas Sheets", "Horas Certificadas", "Horas No Certificadas", "⚠️ Pendiente de Carga / Fuera de Drive"]
-                            st.dataframe(df_final_cruce[[c for c in columnas_vista if c in df_final_cruce.columns]], use_container_width=True)
+                            st.dataframe(df_final_cruce[columnas_vista], use_container_width=True)
 
                             out_cert_excel = io.BytesIO()
                             with pd.ExcelWriter(out_cert_excel, engine="openpyxl") as writer:
-                                df_final_cruce[[c for c in columnas_vista if c in df_final_cruce.columns]].to_excel(writer, index=False, sheet_name=f"Certificacion_{contrato_sel_cert}")
+                                df_final_cruce[columnas_vista].to_excel(writer, index=False, sheet_name=f"Certificacion_{contrato_sel_cert}")
                             out_cert_excel.seek(0)
 
                             st.download_button(
