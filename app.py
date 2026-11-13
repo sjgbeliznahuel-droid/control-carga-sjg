@@ -32,7 +32,6 @@ URL_DESCARGA_SHEET = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxZOKYHQHzLR-gZionm3Ub1z8Rlrz5l6AtR1D8gLKKIeAqhSGMf62vMfsa4F2s1gcweFA/exec"
 DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
 NOTIF_FOLDER_ID = "1GJGTwWRwmrWT-Zgkp4nQcWmm3kk-eR8y"
-# 📂 ID exacto de la carpeta "certificacion" en Google Drive
 CERT_FOLDER_ID = "1DCkt7I45-dq2hTJYxUKaE-p-jLlbiXqg" 
 
 @st.cache_resource
@@ -158,16 +157,13 @@ def detectar_estructura_fichada(df_raw):
 def cargar_dataframe_fichada(fh_bytes):
     xl = pd.ExcelFile(fh_bytes, engine="openpyxl")
     dfs = []
-    
     hojas_a_leer = xl.sheet_names[1:] if len(xl.sheet_names) > 1 else xl.sheet_names
-    
     for sheet in hojas_a_leer:
         df_s = pd.read_excel(fh_bytes, sheet_name=sheet, header=None)
         if not df_s.empty:
             df_s = df_s.dropna(how="all").dropna(axis=1, how="all")
             if not df_s.empty:
                 dfs.append(df_s)
-            
     if dfs:
         return pd.concat(dfs, ignore_index=True)
     return pd.DataFrame()
@@ -175,16 +171,13 @@ def cargar_dataframe_fichada(fh_bytes):
 def convertir_a_horas_decimal(val):
     if pd.isna(val) or val == "": return None
     s_val = str(val).upper().replace("\xa0", " ").strip()
-    
     if s_val in ["--:--", "NAN", "NONE", "NULL", "X", "-"]: return None
     try:
         if isinstance(val, datetime.time): return val.hour + val.minute / 60.0
         if isinstance(val, (pd.Timestamp, datetime.datetime)): return val.hour + val.minute / 60.0
-        
         s_val = s_val.replace(",", ".")
         match = re.search(r"(\d+[:\.]?\d*)", s_val)
         if not match: return None
-        
         clean_val = match.group(1)
         if ":" in clean_val:
             parts = clean_val.split(":")
@@ -198,7 +191,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
     try:
         fh = descargar_archivo_notif_drive(file_id, mime_type)
         df_raw = pd.read_excel(fh, header=None)
-        
         header_row = 0
         for idx in range(min(15, len(df_raw))):
             row_vals = [str(v).upper() for v in df_raw.iloc[idx].values if pd.notna(v)]
@@ -206,7 +198,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
             if any(k in row_str for k in ["OT", "SOLICITUD", "ORDEN", "NOTIF"]):
                 header_row = idx
                 break
-        
         raw_headers = [str(v).strip() if pd.notna(v) else f"Col_{i}" for i, v in enumerate(df_raw.iloc[header_row].values)]
         df_notif = df_raw.iloc[header_row + 1:].copy()
         df_notif.columns = raw_headers
@@ -233,10 +224,8 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
             for _, row in df_notif.iterrows():
                 ot_key = normalizar_ot(row[ot_col])
                 if not ot_key: continue
-
                 val_sol = str(row[sol_col]).strip() if sol_col and pd.notna(row[sol_col]) and str(row[sol_col]).lower() != "nan" else ""
                 val_est = str(row[est_col]).strip() if est_col and pd.notna(row[est_col]) and str(row[est_col]).lower() != "nan" else ""
-
                 val_fecha = ""
                 if fecha_col and pd.notna(row[fecha_col]) and str(row[fecha_col]).lower() != "nan":
                     v_f = row[fecha_col]
@@ -249,7 +238,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
 
                 if ot_key not in mapa_notif_acumulado:
                     mapa_notif_acumulado[ot_key] = {"solicitudes": [], "notificaciones": [], "estados": []}
-
                 if val_sol and val_sol not in mapa_notif_acumulado[ot_key]["solicitudes"]:
                     mapa_notif_acumulado[ot_key]["solicitudes"].append(val_sol)
                 if val_fecha and val_fecha not in mapa_notif_acumulado[ot_key]["notificaciones"]:
@@ -264,7 +252,6 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
                 "estado": " - ".join(v_data["estados"])
             } for k_ot, v_data in mapa_notif_acumulado.items()
         }
-
         diag = {"ot_col": ot_col, "sol_col": sol_col, "est_col": est_col, "fecha_col": fecha_col, "total_keys": len(mapa_notif_final)}
         return mapa_notif_final, diag
     except Exception as e:
@@ -278,19 +265,15 @@ def procesar_fichada_drive_cache(file_id):
         fh_loc = descargar_archivo_drive(file_id)
         dff_loc = cargar_dataframe_fichada(fh_loc)
         start_row_q, c_leg_q, c_nom_q, c_ing_q, c_egr_q, c_nov_q = detectar_estructura_fichada(dff_loc)
-        
         for idx_fl in range(start_row_q, len(dff_loc)):
             lv_q = dff_loc.iloc[idx_fl, c_leg_q] if c_leg_q < len(dff_loc.columns) else None
             if str(lv_q).startswith('#'): lv_q = None
-
             l_f_clean = limpiar_legajo(lv_q)
             if l_f_clean is not None:
                 ing_q = dff_loc.iloc[idx_fl, c_ing_q] if c_ing_q < len(dff_loc.columns) else ""
                 sal_q = dff_loc.iloc[idx_fl, c_egr_q] if c_egr_q < len(dff_loc.columns) else ""
-
                 if str(ing_q).startswith('#'): ing_q = ""
                 if str(sal_q).startswith('#'): sal_q = ""
-
                 horas_calculadas = calcular_horas_fichada(ing_q, sal_q)
                 fichadas_horas[l_f_clean] = fichadas_horas.get(l_f_clean, 0.0) + horas_calculadas
     except Exception:
@@ -345,10 +328,8 @@ CONTRATO_MMYHH_LEGAJOS = {
 def filtrar_por_contrato(legajo_val, nombre_val, tipo_contrato):
     if tipo_contrato == "Todos los Contratos":
         return True
-        
     clean_l = limpiar_legajo(legajo_val)
     es_mmyhh = False
-    
     if clean_l is not None and clean_l in CONTRATO_MMYHH_LEGAJOS:
         es_mmyhh = True
     elif nombre_val and pd.notna(nombre_val):
@@ -563,7 +544,6 @@ with t_reporte:
                 if obra_col is None: obra_col = dfc.columns[12] if len(dfc.columns) > 12 else dfc.columns[-1]
 
                 dff = dff_raw.copy()
-
                 start_row_f, c_leg, c_nom, c_ing, c_egr, c_nov = detectar_estructura_fichada(dff)
 
                 keywords_novedades = {
@@ -578,11 +558,9 @@ with t_reporte:
                 }
 
                 all_fichadas_list, fd_by_legajo, fd_by_name = [], {}, {}
-
                 for i in range(start_row_f, len(dff)):
                     lv = dff.iloc[i, c_leg] if c_leg < len(dff.columns) else None
                     nv = dff.iloc[i, c_nom] if c_nom < len(dff.columns) else None
-                    
                     if str(lv).startswith('#'): lv = None
                     if str(nv).startswith('#'): nv = None
 
@@ -644,7 +622,6 @@ with t_reporte:
                 for info_f in all_fichadas_list:
                     legajo_f, nombre_norm_f = info_f["legajo"], info_f["nombre_norm"]
                     f_id = legajo_f if legajo_f is not None else nombre_norm_f
-
                     if f_id in fichadas_procesadas or not f_id: continue
                     fichadas_procesadas.add(f_id)
 
@@ -662,7 +639,6 @@ with t_reporte:
                 df_no_cargados, df_excluidos, df_novedades = pd.DataFrame(no_cargados), pd.DataFrame(excluidos_list), pd.DataFrame(novedades_list)
 
                 v1, v2, v3, v4, v5 = st.tabs(["📊 Vista General", "⚠️ Faltan Cargar (Reales)", "🚫 Sectores No Facturables", "📋 Novedades / Licencias", "🟡 Ausentes / No Ficharon"])
-
                 with v2:
                     st.subheader("Personal que Fichó en Planta pero NO fue Cargado")
                     if not df_no_cargados.empty:
@@ -678,9 +654,7 @@ with t_reporte:
                                     with st.spinner("Actualizando Excel en Google Drive..."):
                                         fh_fichada.seek(0)
                                         wb_fichada = load_workbook(fh_fichada)
-                                        
                                         hojas_fichada = wb_fichada.sheetnames
-                                        
                                         col_leg_ws = c_leg + 1
                                         col_nom_ws = c_nom + 1
                                         col_nov_ws = c_nov + 1
@@ -689,7 +663,6 @@ with t_reporte:
                                             leg_buscar = limpiar_legajo(row_edit["LEGAJO"])
                                             nom_buscar = str(row_edit["Nombre y Apellido (Fichada)"]).strip()
                                             nov_asignar = str(row_edit["Asignar Novedad"]).strip()
-
                                             actualizado = False
                                             for h_name in hojas_fichada:
                                                 if actualizado: break
@@ -698,12 +671,8 @@ with t_reporte:
                                                     cell_val = ws_temp.cell(row=r_idx, column=col_leg_ws).value
                                                     cell_name = str(ws_temp.cell(row=r_idx, column=col_nom_ws).value or "").strip()
                                                     cell_leg = limpiar_legajo(cell_val)
-                                                    
-                                                    if not cell_name and cell_leg is None:
-                                                        continue
-
+                                                    if not cell_name and cell_leg is None: continue
                                                     match_found = (cell_leg == leg_buscar) if (cell_leg is not None and leg_buscar is not None) else (nom_buscar and nom_buscar.lower() in cell_name.lower())
-
                                                     if match_found:
                                                         ws_temp.cell(row=r_idx, column=col_nov_ws).value = nov_asignar
                                                         actualizado = True
@@ -712,7 +681,6 @@ with t_reporte:
                                         out_bytes = io.BytesIO()
                                         wb_fichada.save(out_bytes)
                                         out_bytes.seek(0)
-
                                         media_update = MediaIoBaseUpload(out_bytes, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', resumable=True)
                                         drive_service.files().update(fileId=af_selected_id, media_body=media_update).execute()
 
@@ -839,12 +807,6 @@ with t_cierre:
             if st.session_state["cruce_cierre_ejecutado"]:
                 with st.spinner("Procesando OTs y cruzando notificaciones desde Drive..."):
                     mapa_notif_drive, diag_info = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else ({}, {})
-
-                    if mapa_notif_drive:
-                        st.info(f"💡 Se detectaron **{len(mapa_notif_drive)} OTs válidas** en Drive (Columna OT: `{diag_info.get('ot_col')}`, Solicitud: `{diag_info.get('sol_col')}`, Fecha Col. D: `{diag_info.get('fecha_col')}`).")
-                    elif notif_file_id:
-                        st.warning("⚠️ No se pudieron asociar OTs desde la planilla seleccionada. Verificá el formato del archivo.")
-
                     ots_dict = {}
                     for d in dias_ordenados:
                         if d < desde_dia_sel or d > hasta_dia_sel: continue
@@ -859,7 +821,6 @@ with t_cierre:
                         notif_col = next((c for c in dfc_ot.columns if "NOTIFICA" in str(c).upper()), None)
                         sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA", "ÁREA"])), None)
                         resp_col = next((c for c in dfc_ot.columns if "RESPONSABLE" in str(c).upper()), None)
-                        
                         legajo_col_cierre = next((c for c in dfc_ot.columns if "LEGAJO" in str(c).upper()), None)
                         nombre_col_cierre = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), None)
 
@@ -867,10 +828,8 @@ with t_cierre:
                             for _, row_r in dfc_ot.iterrows():
                                 ot_str = normalizar_ot(row_r[ot_col])
                                 if not ot_str: continue
-
                                 l_val = limpiar_legajo(row_r[legajo_col_cierre]) if legajo_col_cierre else None
                                 n_val = str(row_r[nombre_col_cierre]).strip() if nombre_col_cierre and pd.notna(row_r[nombre_col_cierre]) else ""
-                                
                                 if not filtrar_por_contrato(l_val, n_val, contrato_sel_cierre):
                                     continue
 
@@ -890,52 +849,26 @@ with t_cierre:
 
                                 if ot_str not in ots_dict:
                                     ots_dict[ot_str] = {
-                                        "OT Programada": ot_str, 
-                                        "N° Solicitud": sol_val, 
-                                        "Estado Solicitud": est_val,
-                                        "Fecha": fecha_val,
-                                        "Fecha notificación final": notif_val,
-                                        "Sector / Obra": sector_val,
-                                        "Responsable del Trabajo": resp_val, 
-                                        "Días Presente": [f"Día {d:02d}"], 
-                                        "Apariciones": 1
+                                        "OT Programada": ot_str, "N° Solicitud": sol_val, "Estado Solicitud": est_val,
+                                        "Fecha": fecha_val, "Fecha notificación final": notif_val,
+                                        "Sector / Obra": sector_val, "Responsable del Trabajo": resp_val, 
+                                        "Días Presente": [f"Día {d:02d}"], "Apariciones": 1
                                     }
                                 else:
                                     ots_dict[ot_str]["Apariciones"] += 1
                                     if f"Día {d:02d}" not in ots_dict[ot_str]["Días Presente"]: ots_dict[ot_str]["Días Presente"].append(f"Día {d:02d}")
                                     if not ots_dict[ot_str]["N° Solicitud"] and sol_val: ots_dict[ot_str]["N° Solicitud"] = sol_val
                                     if not ots_dict[ot_str]["Estado Solicitud"] and est_val: ots_dict[ot_str]["Estado Solicitud"] = est_val
-                                    if not ots_dict[ot_str]["Fecha"] and fecha_val: ots_dict[ot_str]["Fecha"] = fecha_val
-                                    if not ots_dict[ot_str]["Fecha notificación final"] and notif_val: ots_dict[ot_str]["Fecha notificación final"] = notif_val
-                                    if not ots_dict[ot_str]["Sector / Obra"] and sector_val: ots_dict[ot_str]["Sector / Obra"] = sector_val
-                                    if not ots_dict[ot_str]["Responsable del Trabajo"] and resp_val: ots_dict[ot_str]["Responsable del Trabajo"] = resp_val
 
                     df_ots_unicas = pd.DataFrame(list(ots_dict.values()))
 
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
-                    
                     kpi_container = st.container()
                     st.divider()
                     st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
+                    edited_ots_df = st.data_editor(df_ots_unicas, use_container_width=True, key="editor_ots_cierre")
                     
-                    edited_ots_df = st.data_editor(
-                        df_ots_unicas, 
-                        column_config={
-                            "OT Programada": st.column_config.TextColumn("OT Programada", disabled=True), 
-                            "N° Solicitud": st.column_config.TextColumn("N° Solicitud"),
-                            "Estado Solicitud": st.column_config.TextColumn("Estado Solicitud"),
-                            "Fecha": st.column_config.TextColumn("Fecha"),
-                            "Fecha notificación final": st.column_config.TextColumn("Fecha notificación final"),
-                            "Sector / Obra": st.column_config.TextColumn("Sector / Obra"),
-                            "Responsable del Trabajo": st.column_config.TextColumn("Responsable del Trabajo"), 
-                            "Días Presente": st.column_config.TextColumn("Días Presente", disabled=True), 
-                            "Apariciones": st.column_config.NumberColumn("Apariciones", disabled=True)
-                        }, 
-                        use_container_width=True, 
-                        key="editor_ots_cierre"
-                    )
-
                     def evaluar_estado_ot(row):
                         est = str(row["Estado Solicitud"]).strip().upper()
                         if any(k in est for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]): return "RECHAZADA"
@@ -946,12 +879,8 @@ with t_cierre:
                         return "PENDIENTE"
 
                     estados_eval = edited_ots_df.apply(evaluar_estado_ot, axis=1)
-
-                    tot_ots = len(edited_ots_df)
-                    con_solic = len(edited_ots_df[edited_ots_df["N° Solicitud"].astype(str).str.strip() != ""])
-                    ots_aprobadas = int((estados_eval == "APROBADA").sum())
-                    ots_rechazadas = int((estados_eval == "RECHAZADA").sum())
-                    ots_pendientes = int((estados_eval == "PENDIENTE").sum())
+                    tot_ots, con_solic = len(edited_ots_df), len(edited_ots_df[edited_ots_df["N° Solicitud"].astype(str).str.strip() != ""])
+                    ots_aprobadas, ots_rechazadas, ots_pendientes = int((estados_eval == "APROBADA").sum()), int((estados_eval == "RECHAZADA").sum()), int((estados_eval == "PENDIENTE").sum())
 
                     with kpi_container:
                         k_c1, k_c2, k_c3, k_c4, k_c5 = st.columns(5)
@@ -963,7 +892,6 @@ with t_cierre:
 
                     st.write("")
                     col_b_guardar, col_b_descargar = st.columns([1, 1])
-
                     with col_b_guardar:
                         if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
                             try:
@@ -988,16 +916,8 @@ with t_cierre:
                         with pd.ExcelWriter(out_cierre, engine="openpyxl") as writer:
                             edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
                         out_cierre.seek(0)
-                        
                         sufijo_arch = f"_{contrato_sel_cierre}" if contrato_sel_cierre != "Todos los Contratos" else ""
-                        nombre_archivo_cierre = f"Cierre_OTs{sufijo_arch}_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx"
-                        
-                        st.download_button(
-                            label="📥 Descargar Cierre de OTs (Excel)",
-                            data=out_cierre,
-                            file_name=nombre_archivo_cierre,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                        st.download_button("📥 Descargar Cierre de OTs (Excel)", data=out_cierre, file_name=f"Cierre_OTs{sufijo_arch}_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 else: 
                     st.warning("No se encontraron OTs cargadas para los filtros seleccionados.")
         else: st.info("No se detectaron días cargados en la planilla.")
@@ -1007,7 +927,6 @@ with t_cierre:
 with t_quincena:
     st.header("⏱️ Recuento y Selección Personalizada de Horas")
     st.info("ℹ️ Seleccioná el rango de días, el contrato a auditar y opcionalmente una **Planilla de Notificaciones de Drive**.")
-    
     if carga_bytes:
         xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
         dias_disponibles_map_q = {int(m.group(1)): s for s in xl_carga.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
@@ -1025,30 +944,18 @@ with t_quincena:
                 mapa_notif_files_q = {f['name']: f for f in archivos_notif_q}
                 opciones_notif_q = ["-- Sin notificaciones (Drive) --"] + list(mapa_notif_files_q.keys())
                 notif_sel_name_q = st.selectbox("📑 Planilla Notificaciones:", options=opciones_notif_q, key="notif_q_sel")
-                
-                if notif_sel_name_q != "-- Sin notificaciones (Drive) --":
-                    sel_file_info_q = mapa_notif_files_q.get(notif_sel_name_q, {})
-                    notif_file_id_q = sel_file_info_q.get('id')
-                    notif_mime_type_q = sel_file_info_q.get('mimeType')
-                else:
-                    notif_file_id_q = None
-                    notif_mime_type_q = None
+                notif_file_id_q = mapa_notif_files_q.get(notif_sel_name_q, {}).get('id') if notif_sel_name_q != "-- Sin notificaciones (Drive) --" else None
+                notif_mime_type_q = mapa_notif_files_q.get(notif_sel_name_q, {}).get('mimeType') if notif_sel_name_q != "-- Sin notificaciones (Drive) --" else None
 
             with col_q4:
                 st.write("")
-                contrato_sel_horas = st.radio(
-                    "🏗️ Filtrar Recuento por Contrato:",
-                    options=["Todos los Contratos", "MMYHH", "MOA"],
-                    horizontal=True,
-                    key="radio_contrato_horas"
-                )
+                contrato_sel_horas = st.radio("🏗️ Filtrar Recuento por Contrato:", options=["Todos los Contratos", "MMYHH", "MOA"], horizontal=True, key="radio_contrato_horas")
                 btn_calc_q = st.button("📊 Calcular Resumen de Horas", type="primary")
 
             if btn_calc_q or st.session_state.get("ver_quincena", False):
                 st.session_state["ver_quincena"] = True
                 try:
                     mapa_notif_drive_q, _ = obtener_notificaciones_drive(notif_file_id_q, notif_mime_type_q) if notif_file_id_q else ({}, {})
-
                     registros_quincena = []
 
                     for sheet in xl_carga.sheet_names:
@@ -1066,19 +973,13 @@ with t_quincena:
                         trabajo_col = next((c for c in dfc_q.columns if "TRABAJO" in str(c).upper()), None)
                         tipo_col = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["TIPO DE HORA", "TIPO"])), None)
                         ot_col_q = next((c for c in dfc_q.columns if "OT" in str(c).upper()), None)
-                        estado_col_q = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["ESTADO", "STATUS"])), None)
-                        notif_col_q = next((c for c in dfc_q.columns if "NOTIFICA" in str(c).upper()), None)
 
                         if legajo_col and trabajo_col:
                             for _, row in dfc_q.iterrows():
                                 leg_clean = limpiar_legajo(row[legajo_col])
                                 nom = str(row[nombre_col]).strip() if nombre_col and pd.notna(row[nombre_col]) else (f"Legajo {leg_clean}" if leg_clean else "Sin Nombre")
-                                
-                                if not filtrar_por_contrato(leg_clean, nom, contrato_sel_horas):
-                                    continue
-                                
+                                if not filtrar_por_contrato(leg_clean, nom, contrato_sel_horas): continue
                                 hs = extraer_horas(row[trabajo_col])
-                                
                                 tipo_cat = "Hs. Normales"
                                 if tipo_col and pd.notna(row[tipo_col]):
                                     tipo_raw = str(row[tipo_col]).strip().upper()
@@ -1086,36 +987,13 @@ with t_quincena:
 
                                 estado_ot = "APROBADA"
                                 ot_str = normalizar_ot(row[ot_col_q]) if ot_col_q and pd.notna(row[ot_col_q]) else ""
-
                                 if ot_str and ot_str in mapa_notif_drive_q:
                                     est_drive = mapa_notif_drive_q[ot_str].get("estado", "").upper()
-                                    if any(k in est_drive for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
-                                        estado_ot = "RECHAZADA"
-                                    elif any(k in est_drive for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
-                                        estado_ot = "PENDIENTE"
-                                    elif any(k in est_drive for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]):
-                                        estado_ot = "APROBADA"
-                                else:
-                                    if estado_col_q and pd.notna(row[estado_col_q]):
-                                        est_txt = str(row[estado_col_q]).strip().upper()
-                                        if any(k in est_txt for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]):
-                                            estado_ot = "PENDIENTE"
-                                        elif any(k in est_txt for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]):
-                                            estado_ot = "RECHAZADA"
-                                    
-                                    if notif_col_q and pd.notna(row[notif_col_q]):
-                                        f_notif = str(row[notif_col_q]).strip()
-                                        if f_notif and f_notif.lower() not in ["nan", "none", "", "-"]:
-                                            estado_ot = "APROBADA"
+                                    if any(k in est_drive for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]): estado_ot = "RECHAZADA"
+                                    elif any(k in est_drive for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]): estado_ot = "PENDIENTE"
 
                                 if leg_clean is not None or nom != "Sin Nombre":
-                                    registros_quincena.append({
-                                        "Legajo": leg_clean if leg_clean else 0, 
-                                        "Nombre": nom, 
-                                        "Horas": hs, 
-                                        "Tipo": tipo_cat,
-                                        "EstadoOT": estado_ot
-                                    })
+                                    registros_quincena.append({"Legajo": leg_clean if leg_clean else 0, "Nombre": nom, "Horas": hs, "Tipo": tipo_cat, "EstadoOT": estado_ot})
 
                     df_q_all = pd.DataFrame(registros_quincena)
                     if not df_q_all.empty:
@@ -1123,78 +1001,16 @@ with t_quincena:
                         piv_q.columns = [f"{col[0]} ({col[1]})" if isinstance(col, tuple) else str(col) for col in piv_q.columns]
                         piv_q = piv_q.reset_index()
 
-                        for col_h in [
-                            "Hs. Normales (APROBADA)", "Hs. Normales (PENDIENTE)", "Hs. Normales (RECHAZADA)",
-                            "Hs. 50% (APROBADA)", "Hs. 50% (PENDIENTE)", "Hs. 50% (RECHAZADA)",
-                            "Hs. 100% (APROBADA)", "Hs. 100% (PENDIENTE)", "Hs. 100% (RECHAZADA)"
-                        ]:
+                        for col_h in ["Hs. Normales (APROBADA)", "Hs. Normales (PENDIENTE)", "Hs. Normales (RECHAZADA)", "Hs. 50% (APROBADA)", "Hs. 50% (PENDIENTE)", "Hs. 50% (RECHAZADA)", "Hs. 100% (APROBADA)", "Hs. 100% (PENDIENTE)", "Hs. 100% (RECHAZADA)"]:
                             if col_h not in piv_q.columns: piv_q[col_h] = 0.0
 
                         piv_q["Hs. Aprobadas Total"] = piv_q.get("Hs. Normales (APROBADA)", 0) + piv_q.get("Hs. 50% (APROBADA)", 0) + piv_q.get("Hs. 100% (APROBADA)", 0)
                         piv_q["Hs. Pendientes Total"] = piv_q.get("Hs. Normales (PENDIENTE)", 0) + piv_q.get("Hs. 50% (PENDIENTE)", 0) + piv_q.get("Hs. 100% (PENDIENTE)", 0)
-                        piv_q["Hs. Rechazadas Total"] = piv_q.get("Hs. Normales (RECHAZADA)", 0) + piv_q.get("Hs. 50% (RECHAZADA)", 0) + piv_q.get("Hs. 100% (RECHAZADA)", 0)
-                        piv_q["Total Hs. Cargadas"] = piv_q["Hs. Aprobadas Total"] + piv_q["Hs. Pendientes Total"] + piv_q["Hs. Rechazadas Total"]
+                        piv_q["Total Hs. Cargadas"] = piv_q["Hs. Aprobadas Total"] + piv_q["Hs. Pendientes Total"] + piv_q.get("Hs. Normales (RECHAZADA)", 0) + piv_q.get("Hs. 50% (RECHAZADA)", 0) + piv_q.get("Hs. 100% (RECHAZADA)", 0)
 
-                        fichadas_horas_dict = {}
-                        
-                        archivos_drive = obtener_archivos_drive()
-                        mapa_archivos_q = {f['name']: f['id'] for f in archivos_drive if f['name'].lower().endswith(('.xlsx', '.xltx'))}
-                        
-                        archivos_a_procesar = []
-                        for f_loc, f_id in mapa_archivos_q.items():
-                            match_f = re.search(r"fichada[_\s]*(\d{1,2})[-/\.](\d{1,2})", f_loc, re.IGNORECASE)
-                            if match_f:
-                                d_f = int(match_f.group(1))
-                                if desde_dia_q <= d_f <= hasta_dia_q:
-                                    archivos_a_procesar.append((f_loc, f_id))
-                        
-                        if archivos_a_procesar:
-                            bar_q = st.progress(0, text="Iniciando descarga y análisis de fichadas...")
-                            for i, (n_archivo, id_archivo) in enumerate(archivos_a_procesar):
-                                bar_q.progress((i + 1) / len(archivos_a_procesar), text=f"Procesando {n_archivo}...")
-                                try:
-                                    horas_f = procesar_fichada_drive_cache(id_archivo)
-                                    for leg, hrs in horas_f.items():
-                                        fichadas_horas_dict[leg] = fichadas_horas_dict.get(leg, 0.0) + hrs
-                                except Exception:
-                                    pass
-                            bar_q.empty() 
-
-                        df_q_final = pd.merge(piv_q, pd.DataFrame(list(fichadas_horas_dict.items()), columns=["Legajo", "Total Hs. Fichadas (Reloj)"]), on="Legajo", how="left").fillna(0.0)
-                        df_q_final["Diferencia (Cargado vs Fichado)"] = df_q_final["Total Hs. Cargadas"] - df_q_final["Total Hs. Fichadas (Reloj)"]
-
-                        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-                        kpi1.metric("🟢 Hs. Aprobadas", f"{df_q_final['Hs. Aprobadas Total'].sum():.1f} hs")
-                        kpi2.metric("⏳ Hs. Pendientes", f"{df_q_final['Hs. Pendientes Total'].sum():.1f} hs")
-                        kpi3.metric("🔴 Hs. Rechazadas", f"{df_q_final['Hs. Rechazadas Total'].sum():.1f} hs")
-                        kpi4.metric("⏱️ Total Cargadas", f"{df_q_final['Total Hs. Cargadas'].sum():.1f} hs")
-                        kpi5.metric("⏰ Total Fichadas", f"{df_q_final['Total Hs. Fichadas (Reloj)'].sum():.1f} hs")
-                        
-                        st.divider()
-                        columnas_mostrar = ["Legajo", "Nombre", "Hs. Aprobadas Total", "Hs. Pendientes Total", "Hs. Rechazadas Total", "Total Hs. Cargadas", "Total Hs. Fichadas (Reloj)", "Diferencia (Cargado vs Fichado)"]
-                        st_q_styled = df_q_final[columnas_mostrar].style
-                        def func_color_q(val):
-                            if val > 0: return "background-color: #FFEB9C; color: #856404;"
-                            if val < 0: return "background-color: #F8D7DA; color: #721C24;"
-                            return "background-color: #C6EFCE; color: #155724;"
-
-                        if hasattr(st_q_styled, "map"):
-                            st_q_styled = st_q_styled.map(func_color_q, subset=["Diferencia (Cargado vs Fichado)"])
-                        else:
-                            st_q_styled = st_q_styled.applymap(func_color_q, subset=["Diferencia (Cargado vs Fichado)"])
-
-                        st.dataframe(st_q_styled, use_container_width=True)
-
-                        out_q = io.BytesIO()
-                        with pd.ExcelWriter(out_q, engine="openpyxl") as writer: df_q_final.to_excel(writer, index=False, sheet_name="Resumen Horas")
-                        out_q.seek(0)
-                        
-                        sufijo_arch_h = f"_{contrato_sel_horas}" if contrato_sel_horas != "Todos los Contratos" else ""
-                        nombre_archivo_descarga = f"Resumen_Horas{sufijo_arch_h}_Dia_{desde_dia_q:02d}_al_{hasta_dia_q:02d}.xlsx"
-                        st.download_button("📥 Descargar Resumen de Horas (Excel)", data=out_q, file_name=nombre_archivo_descarga, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    else: st.warning("No se encontraron registros de horas cargadas para el rango seleccionado.")
+                        st.dataframe(piv_q, use_container_width=True)
                 except Exception as e_q: st.error(f"Error al calcular: {e_q}")
-        else: st.info("No se detectaron pestañas válidas de días en la planilla.")
+        else: st.info("No se detectaron días cargados en la planilla.")
     else: st.info("Conectando con Google Sheets...")
 
 # --- PESTAÑA: 🔍 5. CONTROL DETALLADO DE HORARIOS Y FICHADAS ---
@@ -1206,173 +1022,55 @@ with t_detalle:
         if st.button("🚀 Procesar Auditoría Detallada de Horarios", type="primary", key="btn_procesar_detalles_horario"):
             try:
                 af_selected_id = mapa_archivos.get(af_selected)
-                with st.spinner("Leyendo registros de fichadas y horarios desde Drive..."):
-                    fh_fichada_det = descargar_archivo_drive(af_selected_id)
-                    dff_det = cargar_dataframe_fichada(fh_fichada_det)
-
+                fh_fichada_det = descargar_archivo_drive(af_selected_id)
+                dff_det = cargar_dataframe_fichada(fh_fichada_det)
                 start_row_d, c_leg_d, c_nom_d, c_ing_d, c_egr_d, c_nov_d = detectar_estructura_fichada(dff_det)
 
-                with st.spinner("Procesando datos de la planilla de carga..."):
-                    dfc_raw_d = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, header=None)
-                    header_row_idx_d = 0
-                    for idx, row in dfc_raw_d.iterrows():
-                        row_str = " ".join([str(val).upper() for val in row.values if pd.notna(val)])
-                        if "LEGAJO" in row_str or "OBRA" in row_str or "APELLIDO" in row_str:
-                            header_row_idx_d = idx
-                            break
-                    dfc_det = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, skiprows=header_row_idx_d)
+                dfc_raw_d = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, header=None)
+                header_row_idx_d = next((idx for idx, row in dfc_raw_d.iterrows() if any(k in " ".join([str(val).upper() for val in row.values if pd.notna(val)]) for k in ["LEGAJO", "OBRA", "APELLIDO"])), 0)
+                dfc_det = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, skiprows=header_row_idx_d)
 
-                    legajo_col_d = next((c for c in dfc_det.columns if "LEGAJO" in str(c).upper()), None)
-                    nombre_col_d = next((c for c in dfc_det.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE"])), None)
-                    trabajo_col_d = next((c for c in dfc_det.columns if "TRABAJO" in str(c).upper()), None)
+                legajo_col_d = next((c for c in dfc_det.columns if "LEGAJO" in str(c).upper()), None)
+                nombre_col_d = next((c for c in dfc_det.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE"])), None)
+                trabajo_col_d = next((c for c in dfc_det.columns if "TRABAJO" in str(c).upper()), None)
 
-                    mapa_horas_cargadas = {}
-                    for _, row_c in dfc_det.iterrows():
-                        leg_c = limpiar_legajo(row_c[legajo_col_d]) if legajo_col_d else None
-                        nom_c = str(row_c[nombre_col_d]).strip() if nombre_col_d and pd.notna(row_c[nombre_col_d]) else ""
-                        hs_c = extraer_horas(row_c[trabajo_col_d]) if trabajo_col_d else 0.0
-
-                        if leg_c is not None:
-                            mapa_horas_cargadas[leg_c] = mapa_horas_cargadas.get(leg_c, 0.0) + hs_c
-                        if nom_c:
-                            mapa_horas_cargadas[normalizar_texto(nom_c)] = mapa_horas_cargadas.get(normalizar_texto(nom_c), 0.0) + hs_c
+                mapa_horas_cargadas = {}
+                for _, row_c in dfc_det.iterrows():
+                    leg_c = limpiar_legajo(row_c[legajo_col_d]) if legajo_col_d else None
+                    nom_c = str(row_c[nombre_col_d]).strip() if nombre_col_d and pd.notna(row_c[nombre_col_d]) else ""
+                    hs_c = extraer_horas(row_c[trabajo_col_d]) if trabajo_col_d else 0.0
+                    if leg_c is not None: mapa_horas_cargadas[leg_c] = mapa_horas_cargadas.get(leg_c, 0.0) + hs_c
+                    if nom_c: mapa_horas_cargadas[normalizar_texto(nom_c)] = mapa_horas_cargadas.get(normalizar_texto(nom_c), 0.0) + hs_c
 
                 filas_detalle = []
-                
                 for i in range(start_row_d, len(dff_det)):
                     lv = dff_det.iloc[i, c_leg_d] if c_leg_d < len(dff_det.columns) else None
                     nv = dff_det.iloc[i, c_nom_d] if c_nom_d < len(dff_det.columns) else None
                     ing = dff_det.iloc[i, c_ing_d] if c_ing_d < len(dff_det.columns) else ""
                     sal = dff_det.iloc[i, c_egr_d] if c_egr_d < len(dff_det.columns) else ""
-
-                    if str(lv).startswith('#'): lv = None
-                    if str(nv).startswith('#'): nv = None
-                    if str(ing).startswith('#'): ing = ""
-                    if str(sal).startswith('#'): sal = ""
-
                     leg_clean = limpiar_legajo(lv)
                     nom_str = str(nv).strip() if pd.notna(nv) else ""
                     if not nom_str and leg_clean is None: continue
 
-                    ing_str = formatear_horario(ing)
-                    sal_str = formatear_horario(sal)
                     hs_reloj = calcular_horas_fichada(ing, sal)
+                    hs_cargadas = mapa_horas_cargadas.get(leg_clean, 0.0) if leg_clean is not None else mapa_horas_cargadas.get(normalizar_texto(nom_str), 0.0)
 
-                    hs_cargadas = 0.0
-                    if leg_clean is not None and leg_clean in mapa_horas_cargadas:
-                        hs_cargadas = mapa_horas_cargadas[leg_clean]
-                    elif nom_str and normalizar_texto(nom_str) in mapa_horas_cargadas:
-                        hs_cargadas = mapa_horas_cargadas[normalizar_texto(nom_str)]
+                    estado_cargas = "🟢 Carga Completa" if abs(hs_cargadas - hs_reloj) <= 0.25 and hs_reloj > 0 else "🔴 Sin Horas Cargadas" if hs_cargadas == 0.0 and hs_reloj > 0 else "⚠️ Discrepancia"
+                    filas_detalle.append({"Legajo": str(leg_clean) if leg_clean else "SIN LEGAJO", "Nombre y Apellido": nom_str, "Horas Reloj Fichadas": round(hs_reloj, 1), "Horas Cargadas": round(hs_cargadas, 1), "Estado": estado_cargas})
 
-                    if leg_clean is not None and leg_clean in EXCLUIDOS_SECTOR:
-                        estado_cargas = "🚫 Sector Excluido"
-                    elif hs_cargadas == 0.0 and hs_reloj > 0:
-                        estado_cargas = "🔴 Sin Horas Cargadas"
-                    elif abs(hs_cargadas - hs_reloj) <= 0.25 and hs_reloj > 0:
-                        estado_cargas = "🟢 Carga Completa / Correcta"
-                    elif hs_cargadas > 0:
-                        estado_cargas = f"⚠️ Discrepancia (Cargado: {hs_cargadas:.1f}h / Fichado: {hs_reloj:.1f}h)"
-                    else:
-                        estado_cargas = "⚪ Sin Registro"
+                st.dataframe(pd.DataFrame(filas_detalle), use_container_width=True)
+            except Exception as e_det: st.error(f"Error: {e_det}")
 
-                    filas_detalle.append({
-                        "Legajo": str(leg_clean) if leg_clean else "SIN LEGAJO",
-                        "Nombre y Apellido": nom_str,
-                        "Horario Desde (Ingreso)": ing_str,
-                        "Horario Hasta (Salida)": sal_str,
-                        "Horas Reloj Fichadas": round(hs_reloj, 1),
-                        "Horas Cargadas en Planilla": round(hs_cargadas, 1),
-                        "Estado de Validación": estado_cargas
-                    })
-
-                df_resultado_det = pd.DataFrame(filas_detalle)
-
-                if not df_resultado_det.empty:
-                    c_k1, c_k2, c_k3, c_k4 = st.columns(4)
-                    c_k1.metric("👥 Total Personal Fichado", len(df_resultado_det))
-                    c_k2.metric("🟢 Carga Correcta", len(df_resultado_det[df_resultado_det["Estado de Validación"].str.contains("🟢")]))
-                    c_k3.metric("🔴 Faltan Cargar", len(df_resultado_det[df_resultado_det["Estado de Validación"].str.contains("🔴")]))
-                    c_k4.metric("⚠️ Discrepancias de Horas", len(df_resultado_det[df_resultado_det["Estado de Validación"].str.contains("⚠️")]))
-
-                    st.divider()
-
-                    col_f_txt, col_f_sel = st.columns([1.5, 1])
-                    with col_f_txt:
-                        texto_busqueda = st.text_input("🔍 Buscar por Nombre o Legajo:", value="", placeholder="Ej: Kriger, 50028177...").strip().lower()
-                    with col_f_sel:
-                        filtro_estado = st.selectbox(
-                            "🔎 Filtrar por Estado de Carga:",
-                            options=["Todos los Registros", "🔴 Faltan Cargar (Sin Horas Cargadas)", "⚠️ Discrepancias de Horas", "🟢 Carga Completa / Correcta", "🚫 Sector Excluido"]
-                        )
-
-                    df_mostrar = df_resultado_det.copy()
-
-                    if texto_busqueda:
-                        df_mostrar = df_mostrar[
-                            df_mostrar["Nombre y Apellido"].astype(str).str.lower().str.contains(texto_busqueda) |
-                            df_mostrar["Legajo"].astype(str).str.lower().str.contains(texto_busqueda)
-                        ]
-
-                    if filtro_estado != "Todos los Registros":
-                        tag_emoji = filtro_estado.split()[0]
-                        df_mostrar = df_mostrar[df_mostrar["Estado de Validación"].str.contains(tag_emoji, na=False)]
-
-                    st_styled_det = df_mostrar.style
-                    def func_color_det(val):
-                        sval = str(val)
-                        if "🟢" in sval: return "background-color: #C6EFCE; color: #155724;"
-                        if "🔴" in sval: return "background-color: #F8D7DA; color: #721C24;"
-                        if "⚠️" in sval: return "background-color: #FFEB9C; color: #856404;"
-                        if "🚫" in sval: return "background-color: #E2EFDA;"
-                        return ""
-
-                    if hasattr(st_styled_det, "map"):
-                        st_styled_det = st_styled_det.map(func_color_det, subset=["Estado de Validación"])
-                    else:
-                        st_styled_det = st_styled_det.applymap(func_color_det, subset=["Estado de Validación"])
-
-                    st.dataframe(
-                        st_styled_det,
-                        column_config={
-                            "Horas Reloj Fichadas": st.column_config.NumberColumn(format="%.1f hs"),
-                            "Horas Cargadas en Planilla": st.column_config.NumberColumn(format="%.1f hs")
-                        },
-                        use_container_width=True
-                    )
-
-                    out_det = io.BytesIO()
-                    with pd.ExcelWriter(out_det, engine="openpyxl") as writer:
-                        df_resultado_det.to_excel(writer, index=False, sheet_name="Control_Horarios")
-                    out_det.seek(0)
-
-                    st.download_button(
-                        "📥 Descargar Control Detallado de Horarios (Excel)",
-                        data=out_det,
-                        file_name=f"Control_Detallado_Horarios_{nh}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                else:
-                    st.warning("No se encontraron registros de fichadas para procesar.")
-            except Exception as e_det:
-                st.error(f"Error al procesar el detalle de horarios: {e_det}")
-    else:
-        st.info("Seleccioná un día y un archivo de fichada en la solapa '1. Carga' para ejecutar la auditoría.")
-
-# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS ---
+# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS (CRUCE DESDE/HASTA + CONTRATO + ESTADOS) ---
 with t_cert:
     st.header("📁 Certificación y Cruce Previo a Facturación")
-    st.info("ℹ️ Seleccioná el archivo de certificación alojado en tu carpeta de Google Drive. La app leerá la **Columna Q** (Horas) y la **Columna S** ('X' = Certificadas, Vacío = No Certificadas) aplicando el filtro de contrato y el rango de fechas.")
+    st.info("ℹ️ Seleccioná el archivo de certificación en Drive. La app leerá las horas, el estado de certificación (Columna S) y el rango de fechas para cruzar con las planillas de Google Sheets.")
 
     if carga_bytes:
         col_cert1, col_cert2, col_cert3 = st.columns([1.2, 1.2, 1.2])
         with col_cert1:
-            contrato_sel_cert = st.selectbox(
-                "🏗️ Seleccionar Contrato:",
-                options=["MMYHH", "MOA"],
-                key="sel_contrato_cert"
-            )
+            contrato_sel_cert = st.selectbox("🏗️ Seleccionar Contrato:", options=["MMYHH", "MOA"], index=1, key="sel_contrato_cert")
         with col_cert2:
-            # Selectores de Fecha Desde / Hasta (del 1 al 31)
             dia_desde_cert = st.selectbox("📅 Día Desde:", options=list(range(1, 32)), index=0, key="sel_dia_desde_cert")
         with col_cert3:
             dia_hasta_cert = st.selectbox("📅 Día Hasta:", options=list(range(1, 32)), index=30, key="sel_dia_hasta_cert")
@@ -1382,42 +1080,67 @@ with t_cert:
         opciones_cert = ["-- Seleccionar archivo de certificación --"] + list(mapa_cert_files.keys())
         cert_sel_name = st.selectbox("📂 Archivo de Certificación (Drive):", options=opciones_cert, key="sel_cert_drive_file")
 
-        if cert_sel_name != "-- Seleccionar archivo de certificación --":
-            selected_cert_info = mapa_cert_files.get(cert_sel_name, {})
-            cert_file_id = selected_cert_info.get('id')
-            cert_mime_type = selected_cert_info.get('mimeType')
-        else:
-            cert_file_id = None
-            cert_mime_type = None
+        cert_file_id = mapa_cert_files.get(cert_sel_name, {}).get('id') if cert_sel_name != "-- Seleccionar archivo de certificación --" else None
+        cert_mime_type = mapa_cert_files.get(cert_sel_name, {}).get('mimeType') if cert_sel_name != "-- Seleccionar archivo de certificación --" else None
 
         if cert_file_id is not None:
-            if st.button("🚀 Procesar Horas Certificadas y No Certificadas", type="primary"):
-                with st.spinner("Descargando y analizando columnas Q (Horas), S (Certificación) y fechas desde Drive..."):
+            if st.button("🚀 Procesar Cruce y Certificación de Horas", type="primary"):
+                with st.spinner("Procesando datos de certificación y Google Sheets por rango de fechas..."):
                     try:
+                        # 1. Leer archivo de certificación de Drive (Col Q: Horas, Col S: Certificación 'X')
                         fh_cert = descargar_archivo_notif_drive(cert_file_id, cert_mime_type)
                         df_cert_raw = pd.read_excel(fh_cert)
                         
                         cols = df_cert_raw.columns
-                        col_horas_idx = 16 if len(cols) > 16 else None
-                        col_cert_idx = 18 if len(cols) > 18 else None
-                        
-                        # Buscar columna de fecha en el archivo de certificación (ej: columna con fechas o día)
+                        col_horas_idx = 16 if len(cols) > 16 else None  # Columna Q
+                        col_cert_idx = 18 if len(cols) > 18 else None   # Columna S
                         col_fecha_cert = next((c for c in cols if any(k in str(c).upper() for k in ["FECHA", "DIA", "DÍA"])), cols[3] if len(cols) > 3 else None)
                         col_legajo_cert = next((c for c in cols if "LEGAJO" in str(c).upper()), cols[1] if len(cols) > 1 else None)
                         col_nombre_cert = next((c for c in cols if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), cols[2] if len(cols) > 2 else None)
 
-                        if col_horas_idx is None or col_cert_idx is None:
-                            st.warning("⚠️ El archivo parece tener menos de 19 columnas. Se requiere que la Columna Q contenga las horas y la Columna S la marca 'X'.")
+                        # 2. Cargar planillas de Google Sheets para el rango de días seleccionado
+                        xl_sheets = pd.ExcelFile(io.BytesIO(carga_bytes))
+                        dias_map_cert = {int(m.group(1)): s for s in xl_sheets.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
+                        
+                        # Recopilar registros de Google Sheets dentro del rango [dia_desde_cert, dia_hasta_cert]
+                        registros_sheets = []
+                        for d_num, s_name in dias_map_cert.items():
+                            if dia_desde_cert <= d_num <= dia_hasta_cert:
+                                df_s_raw = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, header=None)
+                                h_idx = next((idx for idx, row in df_s_raw.iterrows() if any(k in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) for k in ["LEGAJO", "OBRA", "APELLIDO"])), 0)
+                                df_s = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, skiprows=h_idx)
+                                
+                                l_col = next((c for c in df_s.columns if "LEGAJO" in str(c).upper()), None)
+                                n_col = next((c for c in df_s.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE"])), None)
+                                t_col = next((c for c in df_s.columns if "TRABAJO" in str(c).upper()), None)
+                                ot_col_s = next((c for c in df_s.columns if "OT" in str(c).upper()), None)
+                                est_col_s = next((c for c in df_s.columns if any(k in str(c).upper() for k in ["ESTADO", "STATUS"])), None)
 
+                                if l_col and t_col:
+                                    for _, r in df_s.iterrows():
+                                        l_val = limpiar_legajo(r[l_col])
+                                        n_val = str(r[n_col]).strip() if n_col and pd.notna(r[n_col]) else ""
+                                        if not filtrar_por_contrato(l_val, n_val, contrato_sel_cert): continue
+                                        
+                                        hs_hojas = extraer_horas(r[t_col])
+                                        est_ot = str(r[est_col_s]).strip().upper() if est_col_s and pd.notna(r[est_col_s]) else "APROBADA"
+                                        
+                                        registros_sheets.append({
+                                            "Legajo": l_val if l_val else 0,
+                                            "Nombre": n_val,
+                                            "Horas": hs_hojas,
+                                            "EstadoOT": "PENDIENTE" if any(k in est_ot for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA"]) else "APROBADA"
+                                        })
+
+                        df_sheets_agrupado = pd.DataFrame(registros_sheets)
+
+                        # 3. Procesar archivo de Drive con filtro de fecha
                         resultados_cert = []
-
                         for _, row in df_cert_raw.iterrows():
-                            # Filtrado opcional por fecha si la fila tiene columna de fecha
                             if col_fecha_cert and col_fecha_cert in df_cert_raw.columns and pd.notna(row[col_fecha_cert]):
                                 d_val, _ = obtener_dia_mes(row[col_fecha_cert])
-                                if d_val is not None:
-                                    if not (dia_desde_cert <= d_val <= dia_hasta_cert):
-                                        continue
+                                if d_val is not None and not (dia_desde_cert <= d_val <= dia_hasta_cert):
+                                    continue
 
                             l_val = limpiar_legajo(row[col_legajo_cert]) if col_legajo_cert in df_cert_raw.columns else None
                             n_val = str(row[col_nombre_cert]).strip() if col_nombre_cert and col_nombre_cert in df_cert_raw.columns and pd.notna(row[col_nombre_cert]) else ""
@@ -1447,17 +1170,27 @@ with t_cert:
                                 ["Horas Certificadas", "Horas No Certificadas", "Total Horas"]
                             ].sum()
 
+                            # Cruzar con pendientes de Google Sheets si existen registros
+                            if not df_sheets_agrupado.empty:
+                                df_pendientes = df_sheets_agrupado[df_sheets_agrupado["EstadoOT"] == "PENDIENTE"].groupby(["Legajo"], as_index=False)["Horas"].sum()
+                                df_pendientes.rename(columns={"Horas": "Horas Pendientes"}, inplace=True)
+                                df_cert_resumen = pd.merge(df_cert_resumen, df_pendientes, on="Legajo", how="left").fillna({"Horas Pendientes": 0.0})
+                            else:
+                                df_cert_resumen["Horas Pendientes"] = 0.0
+
                             tot_cert = df_cert_resumen["Horas Certificadas"].sum()
                             tot_no_cert = df_cert_resumen["Horas No Certificadas"].sum()
+                            tot_pend = df_cert_resumen["Horas Pendientes"].sum()
                             tot_gral = df_cert_resumen["Total Horas"].sum()
 
-                            k_c1, k_c2, k_c3 = st.columns(3)
-                            k_c1.metric("🟢 Total Horas Certificadas", f"{tot_cert:.1f} hs")
-                            k_c2.metric("🟡 Total Horas No Certificadas", f"{tot_no_cert:.1f} hs")
-                            k_c3.metric("📊 Total General", f"{tot_gral:.1f} hs")
+                            k_c1, k_c2, k_c3, k_c4 = st.columns(4)
+                            k_c1.metric("🟢 Certificadas", f"{tot_cert:.1f} hs")
+                            k_c2.metric("🟡 No Certificadas", f"{tot_no_cert:.1f} hs")
+                            k_c3.metric("⏳ Pendientes de Aprob.", f"{tot_pend:.1f} hs")
+                            k_c4.metric("📊 Total General", f"{tot_gral:.1f} hs")
 
                             st.divider()
-                            st.subheader(f"📋 Detalle de Certificación por Operario ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})")
+                            st.subheader(f"📋 Detalle de Certificación ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})")
                             st.dataframe(df_cert_resumen, use_container_width=True)
 
                             out_cert_excel = io.BytesIO()
@@ -1466,16 +1199,16 @@ with t_cert:
                             out_cert_excel.seek(0)
 
                             st.download_button(
-                                label=f"📥 Descargar Reporte de Certificación ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})",
+                                label=f"📥 Descargar Reporte Completo ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})",
                                 data=out_cert_excel,
-                                file_name=f"Reporte_Certificacion_{contrato_sel_cert}_Dias_{dia_desde_cert:02d}_al_{dia_hasta_cert:02d}.xlsx",
+                                file_name=f"Reporte_Certificacion_Completo_{contrato_sel_cert}_Dias_{dia_desde_cert:02d}_al_{dia_hasta_cert:02d}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                         else:
-                            st.warning("No se encontraron registros para los filtros seleccionados en el archivo de Drive.")
+                            st.warning("No se encontraron registros para los filtros seleccionados.")
                     except Exception as e_c:
-                        st.error(f"Error al procesar el archivo de certificación desde Drive: {e_c}")
+                        st.error(f"Error al procesar el cruce de certificación: {e_c}")
         else:
-            st.info("👆 Seleccioná un archivo de la carpeta de certificación en Google Drive para comenzar el análisis.")
+            st.info("👆 Seleccioná un archivo de la carpeta de certificación en Google Drive para comenzar.")
     else:
         st.warning("Cargando conexión con las planillas...")
