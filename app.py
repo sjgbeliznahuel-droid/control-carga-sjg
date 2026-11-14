@@ -722,7 +722,7 @@ with t_reporte:
             except Exception as e: st.error(f"Error al procesar: {e}")
     else: st.info("Seleccione una fecha de Google Sheets y un archivo de fichada en Drive para cruzar.")
 
-# --- PESTAÑA: 📋 CIERRE DE PERÍODO (GESTIÓN DE OTs) ---
+# --- PESTAÑA: 📋 CIERRE DE PERÍODO (GESTIÓN DE OTs CON DESCARGA Y ESTADO N) ---
 with t_cierre:
     st.header("📋 Notificación y Cierre de Período (Gestión de OTs)")
     if carga_bytes:
@@ -811,21 +811,37 @@ with t_cierre:
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
                     st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
-                    edited_ots_df = st.data_editor(df_ots_unicas, use_container_width=True, key="editor_ots_cierre")
+                    edited_ots_df = df_ots_unicas.data_editor if hasattr(st, "data_editor") else st.data_editor(df_ots_unicas, use_container_width=True, key="editor_ots_cierre")
                     
-                    if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
-                        try:
-                            cambios_ots = {
-                                str(r["OT Programada"]).strip(): {
-                                    "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
-                                    "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else ""
-                                } for _, r in edited_ots_df.iterrows()
-                            }
-                            with st.spinner("Sincronizando con Google Sheets..."):
-                                res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
-                            if res.status_code == 200: st.success("🟢 ¡Sincronizado con éxito (Solicitudes en Col. K y Estado en Col. N)!")
-                            else: st.error(f"Error {res.status_code}")
-                        except Exception as e: st.error(f"Error al enviar datos: {e}")
+                    # Buffer Excel para descarga
+                    buffer_excel = io.BytesIO()
+                    with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
+                        edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
+                    buffer_excel.seek(0)
+
+                    col_b_guardar, col_b_descargar = st.columns([1, 1])
+                    with col_b_guardar:
+                        if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
+                            try:
+                                cambios_ots = {
+                                    str(r["OT Programada"]).strip(): {
+                                        "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
+                                        "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else ""
+                                    } for _, r in edited_ots_df.iterrows()
+                                }
+                                with st.spinner("Sincronizando con Google Sheets..."):
+                                    res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
+                                if res.status_code == 200: st.success("🟢 ¡Sincronizado con éxito (Solicitudes en Col. K y Estado en Col. N)!")
+                                else: st.error(f"Error {res.status_code}")
+                            except Exception as e: st.error(f"Error al enviar datos: {e}")
+
+                    with col_b_descargar:
+                        st.download_button(
+                            label="📥 Descargar OTs Cruzadas en Excel",
+                            data=buffer_excel,
+                            file_name=f"Cierre_OTs_Dias_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
 
 # --- PESTAÑA: ⏱️ RECUENTO Y SELECCIÓN PERSONALIZADA DE HORAS ---
 with t_quincena:
