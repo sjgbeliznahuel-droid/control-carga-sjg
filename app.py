@@ -811,7 +811,9 @@ with t_cierre:
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
                     st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
-                    edited_ots_df = df_ots_unicas.data_editor if hasattr(st, "data_editor") else st.data_editor(df_ots_unicas, use_container_width=True, key="editor_ots_cierre")
+                    
+                    # Corrección aplicada aquí (st.data_editor directo)
+                    edited_ots_df = st.data_editor(df_ots_unicas, use_container_width=True, key="editor_ots_cierre")
                     
                     # Buffer Excel para descarga
                     buffer_excel = io.BytesIO()
