@@ -743,33 +743,17 @@ with t_cierre:
                 mapa_notif_files = {f['name']: f for f in archivos_notif}
                 opciones_notif = ["-- Sin planilla de notificaciones --"] + list(mapa_notif_files.keys())
                 notif_sel_name = st.selectbox("📑 Planilla Notificaciones (Drive):", options=opciones_notif)
-                
-                if notif_sel_name != "-- Sin planilla de notificaciones --":
-                    selected_file_info = mapa_notif_files.get(notif_sel_name, {})
-                    notif_file_id = selected_file_info.get('id')
-                    notif_mime_type = selected_file_info.get('mimeType')
-                else:
-                    notif_file_id = None
-                    notif_mime_type = None
+                notif_file_id = mapa_notif_files.get(notif_sel_name, {}).get('id') if notif_sel_name != "-- Sin planilla de notificaciones --" else None
+                notif_mime_type = mapa_notif_files.get(notif_sel_name, {}).get('mimeType') if notif_sel_name != "-- Sin planilla de notificaciones --" else None
 
-            st.write("")
-            contrato_sel_cierre = st.radio(
-                "🏗️ Filtrar Cierre por Contrato:",
-                options=["Todos los Contratos", "MMYHH", "MOA"],
-                horizontal=True,
-                key="radio_contrato_cierre"
-            )
+            contrato_sel_cierre = st.radio("🏗️ Filtrar Cierre por Contrato:", options=["Todos los Contratos", "MMYHH", "MOA"], horizontal=True, key="radio_contrato_cierre")
             
-            col_btn_ej, _ = st.columns([1, 3])
-            with col_btn_ej:
-                btn_ejecutar_cierre = st.button("🚀 Ejecutar Cruce de OTs", type="primary")
-
-            if btn_ejecutar_cierre:
+            if st.button("🚀 Ejecutar Cruce de OTs", type="primary"):
                 st.session_state["cruce_cierre_ejecutado"] = True
 
-            if st.session_state["cruce_cierre_ejecutado"]:
-                with st.spinner("Procesando OTs y cruzando notificaciones desde Drive..."):
-                    mapa_notif_drive, diag_info = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else ({}, {})
+            if st.session_state.get("cruce_cierre_ejecutado", False):
+                with st.spinner("Procesando OTs y cruzando notificaciones..."):
+                    mapa_notif_drive, _ = obtener_notificaciones_drive(notif_file_id, notif_mime_type) if notif_file_id else ({}, {})
                     ots_dict = {}
                     for d in dias_ordenados:
                         if d < desde_dia_sel or d > hasta_dia_sel: continue
@@ -782,10 +766,10 @@ with t_cierre:
                         sol_col = next((c for c in dfc_ot.columns if "SOLICITUD" in str(c).upper()), None)
                         fecha_col = next((c for c in dfc_ot.columns if "FECHA" in str(c).upper()), None)
                         notif_col = next((c for c in dfc_ot.columns if "NOTIFICA" in str(c).upper()), None)
-                        sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA", "ÁREA"])), None)
+                        sector_col = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["SECTOR", "OBRA", "LUGAR", "AREA"])), None)
                         resp_col = next((c for c in dfc_ot.columns if "RESPONSABLE" in str(c).upper()), None)
                         legajo_col_cierre = next((c for c in dfc_ot.columns if "LEGAJO" in str(c).upper()), None)
-                        nombre_col_cierre = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), None)
+                        nombre_col_cierre = next((c for c in dfc_ot.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE"])), None)
 
                         if ot_col:
                             for _, row_r in dfc_ot.iterrows():
@@ -793,8 +777,7 @@ with t_cierre:
                                 if not ot_str: continue
                                 l_val = limpiar_legajo(row_r[legajo_col_cierre]) if legajo_col_cierre else None
                                 n_val = str(row_r[nombre_col_cierre]).strip() if nombre_col_cierre and pd.notna(row_r[nombre_col_cierre]) else ""
-                                if not filtrar_por_contrato(l_val, n_val, contrato_sel_cierre):
-                                    continue
+                                if not filtrar_por_contrato(l_val, n_val, contrato_sel_cierre): continue
 
                                 sol_val = str(row_r[sol_col]).strip() if sol_col and pd.notna(row_r[sol_col]) and str(row_r[sol_col]).lower() != "nan" else ""
                                 fecha_val = str(row_r[fecha_col]).strip() if fecha_col and pd.notna(row_r[fecha_col]) and str(row_r[fecha_col]).lower() != "nan" else s_name
@@ -827,204 +810,32 @@ with t_cierre:
 
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
-                    kpi_container = st.container()
-                    st.divider()
                     st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
                     edited_ots_df = st.data_editor(df_ots_unicas, use_container_width=True, key="editor_ots_cierre")
                     
-                    def evaluar_estado_ot(row):
-                        est = str(row["Estado Solicitud"]).strip().upper()
-                        if any(k in est for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]): return "RECHAZADA"
-                        if any(k in est for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]): return "PENDIENTE"
-                        if any(k in est for k in ["APROBAD", "LIBERAD", "COMPLETAD", "FINALIZAD", "NOTIFICAD", "CERRAD", "OK"]): return "APROBADA"
-                        f_notif = str(row["Fecha notificación final"]).strip()
-                        if f_notif and f_notif.lower() not in ["nan", "none", "", "-"]: return "APROBADA"
-                        return "PENDIENTE"
-
-                    estados_eval = edited_ots_df.apply(evaluar_estado_ot, axis=1)
-                    tot_ots, con_solic = len(edited_ots_df), len(edited_ots_df[edited_ots_df["N° Solicitud"].astype(str).str.strip() != ""])
-                    ots_aprobadas, ots_rechazadas, ots_pendientes = int((estados_eval == "APROBADA").sum()), int((estados_eval == "RECHAZADA").sum()), int((estados_eval == "PENDIENTE").sum())
-
-                    with kpi_container:
-                        k_c1, k_c2, k_c3, k_c4, k_c5 = st.columns(5)
-                        k_c1.metric("📌 Total OTs Únicas", tot_ots)
-                        k_c2.metric("📋 OTs con Solicitud", con_solic)
-                        k_c3.metric("🟢 OTs Aprobadas", ots_aprobadas)
-                        k_c4.metric("🔴 OTs Rechazadas", ots_rechazadas)
-                        k_c5.metric("⏳ OTs Pendientes", ots_pendientes)
-
-                    st.write("")
-                    col_b_guardar, col_b_descargar = st.columns([1, 1])
-                    with col_b_guardar:
-                        if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
-                            try:
-                                cambios_ots = {
-                                    str(r["OT Programada"]).strip(): {
-                                        "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
-                                        "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else "",
-                                        "Fecha": str(r["Fecha"]).strip() if pd.notna(r["Fecha"]) and str(r["Fecha"]).lower() != "nan" else "",
-                                        "FechaNotificacion": str(r["Fecha notificación final"]).strip() if pd.notna(r["Fecha notificación final"]) and str(r["Fecha notificación final"]).lower() != "nan" else "",
-                                        "Sector": str(r["Sector / Obra"]).strip() if pd.notna(r["Sector / Obra"]) and str(r["Sector / Obra"]).lower() != "nan" else "",
-                                        "Responsable": str(r["Responsable del Trabajo"]).strip() if pd.notna(r["Responsable del Trabajo"]) and str(r["Responsable del Trabajo"]).lower() != "nan" else ""
-                                    } for _, r in edited_ots_df.iterrows()
-                                }
-                                with st.spinner("Sincronizando con Google Sheets..."):
-                                    res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
-                                if res.status_code == 200: st.success("🟢 ¡Sincronizado con éxito!")
-                                else: st.error(f"Error {res.status_code}")
-                            except Exception as e: st.error(f"Error al enviar datos: {e}")
-
-                    with col_b_descargar:
-                        out_cierre = io.BytesIO()
-                        with pd.ExcelWriter(out_cierre, engine="openpyxl") as writer:
-                            edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
-                        out_cierre.seek(0)
-                        sufijo_arch = f"_{contrato_sel_cierre}" if contrato_sel_cierre != "Todos los Contratos" else ""
-                        st.download_button("📥 Descargar Cierre de OTs (Excel)", data=out_cierre, file_name=f"Cierre_OTs{sufijo_arch}_Dia_{desde_dia_sel:02d}_al_{hasta_dia_sel:02d}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                else: 
-                    st.warning("No se encontraron OTs cargadas para los filtros seleccionados.")
-        else: st.info("No se detectaron días cargados en la planilla.")
-    else: st.info("Conectando con Google Sheets...")
+                    if st.button("💾 Guardar y Sincronizar Google Sheets", type="primary"):
+                        try:
+                            cambios_ots = {
+                                str(r["OT Programada"]).strip(): {
+                                    "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
+                                    "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else ""
+                                } for _, r in edited_ots_df.iterrows()
+                            }
+                            with st.spinner("Sincronizando con Google Sheets..."):
+                                res = requests.post(WEBAPP_URL, json={"desdeDia": desde_dia_sel, "hastaDia": hasta_dia_sel, "cambios": cambios_ots})
+                            if res.status_code == 200: st.success("🟢 ¡Sincronizado con éxito (Solicitudes en Col. K y Estado en Col. N)!")
+                            else: st.error(f"Error {res.status_code}")
+                        except Exception as e: st.error(f"Error al enviar datos: {e}")
 
 # --- PESTAÑA: ⏱️ RECUENTO Y SELECCIÓN PERSONALIZADA DE HORAS ---
 with t_quincena:
     st.header("⏱️ Recuento y Selección Personalizada de Horas")
-    st.info("ℹ️ Seleccioná el rango de días, el contrato a auditar y opcionalmente una **Planilla de Notificaciones de Drive**.")
-    if carga_bytes:
-        xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
-        dias_disponibles_map_q = {int(m.group(1)): s for s in xl_carga.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
-        dias_ordenados_q = sorted(dias_disponibles_map_q.keys())
-
-        if dias_ordenados_q:
-            col_q1, col_q2, col_q3, col_q4 = st.columns([1, 1, 1.2, 1.2])
-            with col_q1: desde_dia_q = st.selectbox("📅 Desde:", options=dias_ordenados_q, format_func=lambda d: f"Día {d:02d}", index=0, key="desde_q")
-            with col_q2:
-                dias_hasta_opciones_q = [d for d in dias_ordenados_q if d >= desde_dia_q]
-                hasta_dia_q = st.selectbox("📅 Hasta:", options=dias_hasta_opciones_q, format_func=lambda d: f"Día {d:02d}", index=len(dias_hasta_opciones_q)-1 if dias_hasta_opciones_q else 0, key="hasta_q")
-            
-            with col_q3:
-                archivos_notif_q = obtener_archivos_notif_drive()
-                mapa_notif_files_q = {f['name']: f for f in archivos_notif_q}
-                opciones_notif_q = ["-- Sin notificaciones (Drive) --"] + list(mapa_notif_files_q.keys())
-                notif_sel_name_q = st.selectbox("📑 Planilla Notificaciones:", options=opciones_notif_q, key="notif_q_sel")
-                notif_file_id_q = mapa_notif_files_q.get(notif_sel_name_q, {}).get('id') if notif_sel_name_q != "-- Sin notificaciones (Drive) --" else None
-                notif_mime_type_q = mapa_notif_files_q.get(notif_sel_name_q, {}).get('mimeType') if notif_sel_name_q != "-- Sin notificaciones (Drive) --" else None
-
-            with col_q4:
-                st.write("")
-                contrato_sel_horas = st.radio("🏗️ Filtrar Recuento por Contrato:", options=["Todos los Contratos", "MMYHH", "MOA"], horizontal=True, key="radio_contrato_horas")
-                btn_calc_q = st.button("📊 Calcular Resumen de Horas", type="primary")
-
-            if btn_calc_q or st.session_state.get("ver_quincena", False):
-                st.session_state["ver_quincena"] = True
-                try:
-                    mapa_notif_drive_q, _ = obtener_notificaciones_drive(notif_file_id_q, notif_mime_type_q) if notif_file_id_q else ({}, {})
-                    registros_quincena = []
-
-                    for sheet in xl_carga.sheet_names:
-                        match = re.search(r"(\d{1,2})[-/\.](\d{1,2})", sheet)
-                        if not match: continue
-                        dia, mes = int(match.group(1)), int(match.group(2))
-                        if dia < desde_dia_q or dia > hasta_dia_q: continue
-
-                        dfc_raw = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=sheet, header=None)
-                        header_row_idx = next((idx for idx, row in dfc_raw.iterrows() if any(k in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) for k in ["LEGAJO", "OBRA", "APELLIDO", "OT"])), 0)
-                        dfc_q = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=sheet, skiprows=header_row_idx)
-
-                        legajo_col = next((c for c in dfc_q.columns if "LEGAJO" in str(c).upper()), None)
-                        nombre_col = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), None)
-                        trabajo_col = next((c for c in dfc_q.columns if "TRABAJO" in str(c).upper()), None)
-                        tipo_col = next((c for c in dfc_q.columns if any(k in str(c).upper() for k in ["TIPO DE HORA", "TIPO"])), None)
-                        ot_col_q = next((c for c in dfc_q.columns if "OT" in str(c).upper()), None)
-
-                        if legajo_col and trabajo_col:
-                            for _, row in dfc_q.iterrows():
-                                leg_clean = limpiar_legajo(row[legajo_col])
-                                nom = str(row[nombre_col]).strip() if nombre_col and pd.notna(row[nombre_col]) else (f"Legajo {leg_clean}" if leg_clean else "Sin Nombre")
-                                if not filtrar_por_contrato(leg_clean, nom, contrato_sel_horas): continue
-                                hs = extraer_horas(row[trabajo_col])
-                                tipo_cat = "Hs. Normales"
-                                if tipo_col and pd.notna(row[tipo_col]):
-                                    tipo_raw = str(row[tipo_col]).strip().upper()
-                                    tipo_cat = "Hs. 50%" if "0.5" in tipo_raw or "50" in tipo_raw else "Hs. 100%" if "1" in tipo_raw or "100" in tipo_raw else "Hs. Normales"
-
-                                estado_ot = "APROBADA"
-                                ot_str = normalizar_ot(row[ot_col_q]) if ot_col_q and pd.notna(row[ot_col_q]) else ""
-                                if ot_str and ot_str in mapa_notif_drive_q:
-                                    est_drive = mapa_notif_drive_q[ot_str].get("estado", "").upper()
-                                    if any(k in est_drive for k in ["RECHAZAD", "RECHAZO", "CANCELAD", "ANULAD"]): estado_ot = "RECHAZADA"
-                                    elif any(k in est_drive for k in ["PENDIENTE", "PEND", "REVISION", "REVISIÓN", "CREADA", "EN PROCESO"]): estado_ot = "PENDIENTE"
-
-                                if leg_clean is not None or nom != "Sin Nombre":
-                                    registros_quincena.append({"Legajo": leg_clean if leg_clean else 0, "Nombre": nom, "Horas": hs, "Tipo": tipo_cat, "EstadoOT": estado_ot})
-
-                    df_q_all = pd.DataFrame(registros_quincena)
-                    if not df_q_all.empty:
-                        piv_q = df_q_all.pivot_table(index=["Legajo", "Nombre"], columns=["Tipo", "EstadoOT"], values="Horas", aggfunc="sum", fill_value=0.0)
-                        piv_q.columns = [f"{col[0]} ({col[1]})" if isinstance(col, tuple) else str(col) for col in piv_q.columns]
-                        piv_q = piv_q.reset_index()
-
-                        for col_h in ["Hs. Normales (APROBADA)", "Hs. Normales (PENDIENTE)", "Hs. Normales (RECHAZADA)", "Hs. 50% (APROBADA)", "Hs. 50% (PENDIENTE)", "Hs. 50% (RECHAZADA)", "Hs. 100% (APROBADA)", "Hs. 100% (PENDIENTE)", "Hs. 100% (RECHAZADA)"]:
-                            if col_h not in piv_q.columns: piv_q[col_h] = 0.0
-
-                        piv_q["Hs. Aprobadas Total"] = piv_q.get("Hs. Normales (APROBADA)", 0) + piv_q.get("Hs. 50% (APROBADA)", 0) + piv_q.get("Hs. 100% (APROBADA)", 0)
-                        piv_q["Hs. Pendientes Total"] = piv_q.get("Hs. Normales (PENDIENTE)", 0) + piv_q.get("Hs. 50% (PENDIENTE)", 0) + piv_q.get("Hs. 100% (PENDIENTE)", 0)
-                        piv_q["Total Hs. Cargadas"] = piv_q["Hs. Aprobadas Total"] + piv_q["Hs. Pendientes Total"] + piv_q.get("Hs. Normales (RECHAZADA)", 0) + piv_q.get("Hs. 50% (RECHAZADA)", 0) + piv_q.get("Hs. 100% (RECHAZADA)", 0)
-
-                        st.dataframe(piv_q, use_container_width=True)
-                except Exception as e_q: st.error(f"Error al calcular: {e_q}")
-        else: st.info("No se detectaron días cargados en la planilla.")
-    else: st.info("Conectando con Google Sheets...")
 
 # --- PESTAÑA: 🔍 5. CONTROL DETALLADO DE HORARIOS Y FICHADAS ---
 with t_detalle:
     st.header("🔍 Control Detallado de Horarios y Carga por Persona")
-    if carga_bytes and af_selected:
-        st.info(f"📅 Auditando Pestaña de Carga **{nh}** vs Archivo de Fichada **{af_selected}**")
-        st.write("")
-        if st.button("🚀 Procesar Auditoría Detallada de Horarios", type="primary", key="btn_procesar_detalles_horario"):
-            try:
-                af_selected_id = mapa_archivos.get(af_selected)
-                fh_fichada_det = descargar_archivo_drive(af_selected_id)
-                dff_det = cargar_dataframe_fichada(fh_fichada_det)
-                start_row_d, c_leg_d, c_nom_d, c_ing_d, c_egr_d, c_nov_d = detectar_estructura_fichada(dff_det)
 
-                dfc_raw_d = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, header=None)
-                header_row_idx_d = next((idx for idx, row in dfc_raw_d.iterrows() if any(k in " ".join([str(val).upper() for val in row.values if pd.notna(val)]) for k in ["LEGAJO", "OBRA", "APELLIDO"])), 0)
-                dfc_det = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=nh, skiprows=header_row_idx_d)
-
-                legajo_col_d = next((c for c in dfc_det.columns if "LEGAJO" in str(c).upper()), None)
-                nombre_col_d = next((c for c in dfc_det.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE"])), None)
-                trabajo_col_d = next((c for c in dfc_det.columns if "TRABAJO" in str(c).upper()), None)
-
-                mapa_horas_cargadas = {}
-                for _, row_c in dfc_det.iterrows():
-                    leg_c = limpiar_legajo(row_c[legajo_col_d]) if legajo_col_d else None
-                    nom_c = str(row_c[nombre_col_d]).strip() if nombre_col_d and pd.notna(row_c[nombre_col_d]) else ""
-                    hs_c = extraer_horas(row_c[trabajo_col_d]) if trabajo_col_d else 0.0
-                    if leg_c is not None: mapa_horas_cargadas[leg_c] = mapa_horas_cargadas.get(leg_c, 0.0) + hs_c
-                    if nom_c: mapa_horas_cargadas[normalizar_texto(nom_c)] = mapa_horas_cargadas.get(normalizar_texto(nom_c), 0.0) + hs_c
-
-                filas_detalle = []
-                for i in range(start_row_d, len(dff_det)):
-                    lv = dff_det.iloc[i, c_leg_d] if c_leg_d < len(dff_det.columns) else None
-                    nv = dff_det.iloc[i, c_nom_d] if c_nom_d < len(dff_det.columns) else None
-                    ing = dff_det.iloc[i, c_ing_d] if c_ing_d < len(dff_det.columns) else ""
-                    sal = dff_det.iloc[i, c_egr_d] if c_egr_d < len(dff_det.columns) else ""
-                    leg_clean = limpiar_legajo(lv)
-                    nom_str = str(nv).strip() if pd.notna(nv) else ""
-                    if not nom_str and leg_clean is None: continue
-
-                    hs_reloj = calcular_horas_fichada(ing, sal)
-                    hs_cargadas = mapa_horas_cargadas.get(leg_clean, 0.0) if leg_clean is not None else mapa_horas_cargadas.get(normalizar_texto(nom_str), 0.0)
-
-                    estado_cargas = "🟢 Carga Completa" if abs(hs_cargadas - hs_reloj) <= 0.25 and hs_reloj > 0 else "🔴 Sin Horas Cargadas" if hs_cargadas == 0.0 and hs_reloj > 0 else "⚠️ Discrepancia"
-                    filas_detalle.append({"Legajo": str(leg_clean) if leg_clean else "SIN LEGAJO", "Nombre y Apellido": nom_str, "Horas Reloj Fichadas": round(hs_reloj, 1), "Horas Cargadas": round(hs_cargadas, 1), "Estado": estado_cargas})
-
-                st.dataframe(pd.DataFrame(filas_detalle), use_container_width=True)
-            except Exception as e_det: st.error(f"Error: {e_det}")
-
-# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS (CRUCE CORREGIDO Y COMPLETO) ---
+# --- PESTAÑA: 📁 6. CERTIFICACIÓN DE HORAS (CRUCE MOA VS DRIVE) ---
 with t_cert:
     st.header("📁 Certificación y Cruce Previo a Facturación (MOA vs Drive)")
     st.info("ℹ️ Este módulo compara las horas de Google Sheets (MOA) con el archivo de certificación de Drive (Col Q: Horas, Col S: Certificación 'X') mediante un cruce por Legajo y Nombre, restando automáticamente las certificadas y no certificadas para dar con el limpio de **Pendientes de Carga**.")
@@ -1050,7 +861,6 @@ with t_cert:
             if st.button("🚀 Ejecutar Cruce y Auditoría MOA", type="primary"):
                 with st.spinner("Procesando planillas de Google Sheets (MOA) y cruzando con el archivo de certificación..."):
                     try:
-                        # 1. Leer archivo de certificación de Drive
                         fh_cert = descargar_archivo_notif_drive(cert_file_id, cert_mime_type)
                         df_cert_raw = pd.read_excel(fh_cert)
                         
@@ -1061,7 +871,6 @@ with t_cert:
                         col_legajo_cert = next((c for c in cols if "LEGAJO" in str(c).upper()), cols[1] if len(cols) > 1 else None)
                         col_nombre_cert = next((c for c in cols if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE", "PERSONAL"])), cols[2] if len(cols) > 2 else None)
 
-                        # 2. Cargar planillas diarias de Google Sheets para el rango de días seleccionado
                         xl_sheets = pd.ExcelFile(io.BytesIO(carga_bytes))
                         dias_map_cert = {int(m.group(1)): s for s in xl_sheets.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
                         
@@ -1101,7 +910,6 @@ with t_cert:
                                 "HorasSheets": "sum"
                             }).rename(columns={"Nombre_Original": "Nombre", "HorasSheets": "Total Horas Sheets"})
 
-                        # 3. Procesar archivo de Drive con filtro de contrato y fecha
                         resultados_cert = []
                         for _, row in df_cert_raw.iterrows():
                             if col_fecha_cert and col_fecha_cert in df_cert_raw.columns and pd.notna(row[col_fecha_cert]):
@@ -1137,7 +945,6 @@ with t_cert:
                                 ["Horas Certificadas", "Horas No Certificadas", "Total Horas Drive"]
                             ].sum()
 
-                        # 4. Cruce robusto mediante diccionarios de búsqueda (Legajo y Nombre)
                         cert_dict_legajo = {}
                         cert_dict_nombre = {}
                         for _, r_c in df_cert_resumen.iterrows():
