@@ -25,6 +25,12 @@ if "mostrar_reporte" not in st.session_state:
     st.session_state["mostrar_reporte"] = False
 if "cruce_cierre_ejecutado" not in st.session_state:
     st.session_state["cruce_cierre_ejecutado"] = False
+if "af_selected" not in st.session_state:
+    st.session_state["af_selected"] = None
+if "mapa_archivos" not in st.session_state:
+    st.session_state["mapa_archivos"] = {}
+if "nh_selected" not in st.session_state:
+    st.session_state["nh_selected"] = None
 
 # --- CONFIGURACIÓN GOOGLE SHEETS & DRIVE ---
 SHEET_ID = "1gGkGjO-ZX7auYdlKAuI9rLEN_KoVah3vdnz7WofcHq0"
@@ -32,7 +38,7 @@ URL_DESCARGA_SHEET = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?
 WEBAPP_URL = "https://script.google.com/macros/s/AKfycbxZOKYHQHzLR-gZionm3Ub1z8Rlrz5l6AtR1D8gLKKIeAqhSGMf62vMfsa4F2s1gcweFA/exec"
 DRIVE_FOLDER_ID = "1fMm6XYmw-dwqSqhijX6tHAe2VdVMtA2-"
 NOTIF_FOLDER_ID = "1GJGTwWRwmrWT-Zgkp4nQcWmm3kk-eR8y"
-CERT_FOLDER_ID = "1DCkt7I45-dq2hTJYxUKaE-p-jLlbiXqg" 
+CERT_FOLDER_ID = "1DCkt7I45-dq2hTJYxUKaE-p-jLlbiXqg"
 
 @st.cache_resource
 def conectar_drive():
@@ -122,7 +128,7 @@ def descargar_archivo_notif_drive(file_id, mime_type):
     return fh
 
 def detectar_estructura_fichada(df_raw):
-    header_row = 0 
+    header_row = 0
     col_leg, col_nom, col_ing, col_egr, col_nov = -1, -1, -1, -1, -1
     if df_raw.empty:
         return header_row, 2, 3, 6, 7, 12
@@ -143,11 +149,11 @@ def detectar_estructura_fichada(df_raw):
             elif "SAL" in val or "EGRESO" in val or "ULTIMA" in val or "HS. SAL" in val: col_egr = idx
             elif "OBRA" in val or "NOVEDAD" in val or "OBSERVAC" in val: col_nov = idx
 
-    if col_leg == -1: col_leg = 2   
-    if col_nom == -1: col_nom = 3   
-    if col_ing == -1: col_ing = 6   
-    if col_egr == -1: col_egr = 7   
-    if col_nov == -1: col_nov = 12  
+    if col_leg == -1: col_leg = 2
+    if col_nom == -1: col_nom = 3
+    if col_ing == -1: col_ing = 6
+    if col_egr == -1: col_egr = 7
+    if col_nov == -1: col_nov = 12
     return header_row + 1, col_leg, col_nom, col_ing, col_egr, col_nov
 
 def cargar_dataframe_fichada(fh_bytes):
@@ -197,7 +203,7 @@ def obtener_notificaciones_drive(file_id, mime_type=None):
         raw_headers = [str(v).strip() if pd.notna(v) else f"Col_{i}" for i, v in enumerate(df_raw.iloc[header_row].values)]
         df_notif = df_raw.iloc[header_row + 1:].copy()
         df_notif.columns = raw_headers
-        
+
         ot_col = None
         for c in df_notif.columns:
             c_str = str(c).strip().upper()
@@ -265,7 +271,6 @@ def normalizar_texto(val):
     s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
     return " ".join("".join(c for c in s if c.isalnum() or c.isspace()).split())
 
-# --- CONFIGURACIONES DE REGLAS Y CONTRATOS ---
 EXCLUIDOS_SECTOR = {
     60003127: ("Villaseca Urrutia, Silvina", "Seguridad e Higiene"),
     60017753: ("Miño, Dario Oscar", "Seguridad e Higiene"),
@@ -325,8 +330,9 @@ def filtrar_por_contrato(legajo_val, nombre_val, tipo_contrato):
         return not es_mmyhh
     return True
 
+@st.cache_data(ttl=120)
 def obtener_excel_nube(url):
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
     response.raise_for_status()
     return response.content
 
@@ -377,6 +383,13 @@ with col_refrescar:
 
 st.divider()
 
+# Descarga global de Google Sheets para que esté disponible en todas las pestañas
+try:
+    carga_bytes = obtener_excel_nube(URL_DESCARGA_SHEET)
+except Exception as e:
+    carga_bytes = None
+    st.warning(f"No se pudo descargar la planilla de Google Sheets: {e}")
+
 MESES_NOMBRES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
 
 t_rrhh, t_carga, t_reglas, t_reporte, t_cierre, t_quincena, t_detalle, t_cert = st.tabs([
@@ -395,11 +408,11 @@ with t_carga:
         try:
             archivos_drive = obtener_archivos_drive()
             archivos_guardados = [f['name'] for f in archivos_drive if f['name'].lower().endswith(('.xlsx', '.xltx'))]
-            mapa_archivos = {f['name']: f['id'] for f in archivos_drive}
-            
+            st.session_state["mapa_archivos"] = {f['name']: f['id'] for f in archivos_drive}
+
             if not archivos_guardados:
                 st.warning("Aún no hay fichadas en Drive.")
-                af_selected = None
+                st.session_state["af_selected"] = None
             else:
                 fichadas_por_mes = {}
                 for f in archivos_guardados:
@@ -411,8 +424,8 @@ with t_carga:
 
                 if not fichadas_por_mes:
                     opciones = ["-- Seleccione una fichada --"] + archivos_guardados
-                    af_selected = st.selectbox("Elegir Fichada:", options=opciones)
-                    if af_selected == "-- Seleccione una fichada --": af_selected = None
+                    af_sel = st.selectbox("Elegir Fichada:", options=opciones, key="sb_fichada_sin_fecha")
+                    st.session_state["af_selected"] = None if af_sel == "-- Seleccione una fichada --" else af_sel
                 else:
                     col_mes, col_dia = st.columns(2)
                     with col_mes:
@@ -425,26 +438,27 @@ with t_carga:
 
                     if dia_elegido_str != "-- Seleccionar Día --":
                         dia_elegido_num = int(dia_elegido_str.replace("Día ", ""))
-                        af_selected = fichadas_por_mes[mes_elegido_num][dia_elegido_num]
-                        st.info(f"☁️ Archivo vinculado desde Drive: **{af_selected}**")
+                        st.session_state["af_selected"] = fichadas_por_mes[mes_elegido_num][dia_elegido_num]
+                        st.info(f"☁️ Archivo vinculado desde Drive: **{st.session_state['af_selected']}**")
                     else:
-                        af_selected = None
+                        st.session_state["af_selected"] = None
         except Exception as e:
-            st.error("Error al leer archivos de Drive.")
-            af_selected = None
+            st.error(f"Error al leer archivos de Drive: {e}")
+            st.session_state["af_selected"] = None
 
     with c1:
         st.subheader("Planilla de Horas (Carga)")
-        st.success("☁️ Sincronizado con Google Sheets")
-        try:
-            with st.spinner("Sincronizando con Google Sheets..."):
-                carga_bytes = obtener_excel_nube(URL_DESCARGA_SHEET)
-                xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
-                hojas_disponibles = xl_carga.sheet_names
-            nh = st.selectbox("Seleccionar Fecha / Pestaña:", options=hojas_disponibles)
-        except Exception as e:
-            st.error(f"No se pudo conectar a Google Sheets. Error: {e}")
-            carga_bytes, nh = None, None
+        if carga_bytes:
+            st.success("☁️ Sincronizado con Google Sheets")
+            xl_carga = pd.ExcelFile(io.BytesIO(carga_bytes))
+            hojas_disponibles = xl_carga.sheet_names
+            st.session_state["nh_selected"] = st.selectbox("Seleccionar Fecha / Pestaña:", options=hojas_disponibles)
+        else:
+            st.session_state["nh_selected"] = None
+
+af_selected = st.session_state.get("af_selected")
+mapa_archivos = st.session_state.get("mapa_archivos", {})
+nh = st.session_state.get("nh_selected")
 
 with t_reglas:
     st.subheader("⚙️ Configuración de Personal Excluido / No Facturable")
@@ -452,7 +466,37 @@ with t_reglas:
     st.dataframe(df_reglas, use_container_width=True)
 
 with t_reporte:
-    if carga_bytes and af_selected:
+    # Si falta seleccionar algún dato, permitir seleccionarlo o indicar qué falta
+    if not carga_bytes:
+        st.warning("⚠️ No hay conexión con la planilla de Google Sheets.")
+    else:
+        if not nh or not af_selected:
+            st.info("Seleccioná la pestaña de Google Sheets y el archivo de fichada en Drive (acá o en **1. Carga**):")
+            col_r1, col_r2 = st.columns(2)
+            xl_rep = pd.ExcelFile(io.BytesIO(carga_bytes))
+            with col_r1:
+                nh_local = st.selectbox("Fecha / Pestaña (Google Sheets):", options=xl_rep.sheet_names, key="rep_nh")
+            with col_r2:
+                if not mapa_archivos:
+                    try:
+                        arch_d = obtener_archivos_drive()
+                        mapa_archivos = {f['name']: f['id'] for f in arch_d}
+                        st.session_state["mapa_archivos"] = mapa_archivos
+                    except Exception:
+                        pass
+                lista_f = [k for k in mapa_archivos.keys() if k.lower().endswith(('.xlsx', '.xltx'))]
+                af_local = st.selectbox("Archivo de Fichada (Drive):", options=["-- Seleccionar --"] + lista_f, key="rep_af")
+                af_local = None if af_local == "-- Seleccionar --" else af_local
+
+            nh = nh_local or nh
+            af_selected = af_local or af_selected
+            if nh:
+                st.session_state["nh_selected"] = nh
+            if af_selected:
+                st.session_state["af_selected"] = af_selected
+
+    if carga_bytes and nh and af_selected:
+        st.caption(f"📌 Listo para cruzar: Pestaña **{nh}** ↔ Fichada **{af_selected}**")
         col_btn1, col_btn2 = st.columns([1, 1])
         with col_btn1:
             if st.button("🚀 Ejecutar Cruce Estricto por Fecha", type="primary"):
@@ -460,6 +504,7 @@ with t_reporte:
                 st.rerun()
         with col_btn2:
             if st.button("🔄 Sincronizar Todo (Drive y Sheets)"):
+                st.cache_data.clear()
                 st.session_state["mostrar_reporte"] = True
                 st.rerun()
 
@@ -471,8 +516,8 @@ with t_reporte:
 
                 d_pestana, m_pestana = obtener_dia_mes(nh)
                 dff_raw = cargar_dataframe_fichada(fh_fichada)
-                fh_fichada.seek(0) 
-                
+                fh_fichada.seek(0)
+
                 d_fichada, m_fichada = obtener_dia_mes(af_selected)
                 if d_fichada is None: d_fichada, m_fichada = extraer_fecha_contenido(dff_raw)
 
@@ -526,7 +571,7 @@ with t_reporte:
 
                     col_m_val = str(dff.iloc[i, c_nov]).upper() if c_nov < len(dff.columns) and pd.notna(dff.iloc[i, c_nov]) else ""
                     row_text_sin_nombre = " ".join([str(val).upper() for idx_v, val in enumerate(dff.iloc[i].values) if idx_v != c_nom and pd.notna(val)])
-                    
+
                     novedad_detectada = None
                     for kw, label in keywords_novedades.items():
                         if kw in col_m_val or kw in row_text_sin_nombre:
@@ -641,7 +686,7 @@ with t_reporte:
                                         drive_service.files().update(fileId=af_selected_id, media_body=media_update).execute()
 
                                     st.success("¡Archivo actualizado en Google Drive con éxito!")
-                                    time.sleep(2) 
+                                    time.sleep(2)
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al escribir en Drive: {e}")
@@ -713,7 +758,6 @@ with t_reporte:
                 st.download_button("📥 Descargar Excel Formateado", data=out, file_name=f"Control_{nh}.xlsx")
 
             except Exception as e: st.error(f"Error al procesar: {e}")
-    else: st.info("Seleccione una fecha de Google Sheets y un archivo de fichada en Drive para cruzar.")
 
 # --- PESTAÑA: 📋 CIERRE DE PERÍODO (GESTIÓN DE OTs CON CRUCE, ESTADOS Y DESCARGA) ---
 with t_cierre:
@@ -725,7 +769,7 @@ with t_cierre:
 
         if dias_ordenados:
             col_f1, col_f2, col_f3 = st.columns([1, 1, 1.2])
-            with col_f1: 
+            with col_f1:
                 desde_dia_sel = st.selectbox("📅 Fecha Desde:", options=dias_ordenados, format_func=lambda d: f"Día {d:02d} ({dias_disponibles_map[d]})", index=0)
             with col_f2:
                 dias_hasta_opciones = [d for d in dias_ordenados if d >= desde_dia_sel]
@@ -740,7 +784,7 @@ with t_cierre:
                 notif_mime_type = mapa_notif_files.get(notif_sel_name, {}).get('mimeType') if notif_sel_name != "-- Sin planilla de notificaciones --" else None
 
             contrato_sel_cierre = st.radio("🏗️ Filtrar Cierre por Contrato:", options=["Todos los Contratos", "MMYHH", "MOA"], horizontal=True, key="radio_contrato_cierre")
-            
+
             if st.button("🚀 Ejecutar Cruce de OTs", type="primary"):
                 st.session_state["cruce_cierre_ejecutado"] = True
 
@@ -790,7 +834,7 @@ with t_cierre:
                                     ots_dict[ot_str] = {
                                         "OT Programada": ot_str, "N° Solicitud": sol_val, "Estado Solicitud": est_val,
                                         "Fecha": fecha_val, "Fecha notificación final": notif_val,
-                                        "Sector / Obra": sector_val, "Responsable del Trabajo": resp_val, 
+                                        "Sector / Obra": sector_val, "Responsable del Trabajo": resp_val,
                                         "Días Presente": [f"Día {d:02d}"], "Apariciones": 1
                                     }
                                 else:
@@ -803,33 +847,33 @@ with t_cierre:
 
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
-                    
-                    # --- APARTADO DE FILTRADO Y MÉTRICAS DE OTs ---
+
                     st.divider()
-                    st.subheader("🔍 Filtrado y Auditoría de OTs (Aprobadas / Pendientes)")
-                    
-                    # Contadores métricos rápidos
+                    st.subheader("🔍 Filtrado y Auditoría de OTs (Aprobadas / Pendientes / Rechazadas)")
+
                     total_ots_cruzadas = len(df_ots_unicas)
                     aprobadas_count = len(df_ots_unicas[df_ots_unicas["Estado Solicitud"].str.lower().str.contains("aprob", na=False)])
                     pendientes_count = len(df_ots_unicas[df_ots_unicas["Estado Solicitud"].str.lower().str.contains("pend", na=False)])
-                    
-                    m1, m2, m3 = st.columns(3)
+                    rechazadas_count = len(df_ots_unicas[df_ots_unicas["Estado Solicitud"].str.lower().str.contains("rechaz", na=False)])
+
+                    m1, m2, m3, m4 = st.columns(4)
                     m1.metric("📊 OTs Únicas Procesadas", total_ots_cruzadas)
                     m2.metric("🟢 Aprobadas", aprobadas_count)
-                    m3.metric("🟡 Pendientes / Otras", pendientes_count)
-                    
-                    # Selector para filtrar la vista
-                    filtro_estado = st.selectbox("Filtrar vista de OTs por Estado:", ["Todas", "Aprobadas", "Pendientes"])
+                    m3.metric("🟡 Pendientes", pendientes_count)
+                    m4.metric("🔴 Rechazadas", rechazadas_count)
+
+                    filtro_estado = st.selectbox("Filtrar vista de OTs por Estado:", ["Todas", "Aprobadas", "Pendientes", "Rechazadas"])
                     df_vista_ots = df_ots_unicas.copy()
                     if filtro_estado == "Aprobadas":
                         df_vista_ots = df_vista_ots[df_vista_ots["Estado Solicitud"].str.lower().str.contains("aprob", na=False)]
                     elif filtro_estado == "Pendientes":
                         df_vista_ots = df_vista_ots[df_vista_ots["Estado Solicitud"].str.lower().str.contains("pend", na=False)]
+                    elif filtro_estado == "Rechazadas":
+                        df_vista_ots = df_vista_ots[df_vista_ots["Estado Solicitud"].str.lower().str.contains("rechaz", na=False)]
 
                     st.write(f"📝 **Completá o modificá los datos directamente en la tabla ({filtro_estado}):**")
                     edited_ots_df = st.data_editor(df_vista_ots, use_container_width=True, key="editor_ots_cierre")
-                    
-                    # Buffer Excel para descarga
+
                     buffer_excel = io.BytesIO()
                     with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
                         edited_ots_df.to_excel(writer, index=False, sheet_name="Cierre_OTs")
@@ -841,7 +885,7 @@ with t_cierre:
                             try:
                                 cambios_ots = {
                                     str(r["OT Programada"]).strip(): {
-                                        "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "", 
+                                        "Solicitud": str(r["N° Solicitud"]).strip() if pd.notna(r["N° Solicitud"]) and str(r["N° Solicitud"]).lower() != "nan" else "",
                                         "Estado": str(r["Estado Solicitud"]).strip() if pd.notna(r["Estado Solicitud"]) and str(r["Estado Solicitud"]).lower() != "nan" else ""
                                     } for _, r in edited_ots_df.iterrows()
                                 }
@@ -895,7 +939,7 @@ with t_cert:
                     try:
                         fh_cert = descargar_archivo_notif_drive(cert_file_id, cert_mime_type)
                         df_cert_raw = pd.read_excel(fh_cert)
-                        
+
                         cols = df_cert_raw.columns
                         col_horas_idx = 16 if len(cols) > 16 else None  # Columna Q
                         col_cert_idx = 18 if len(cols) > 18 else None   # Columna S
@@ -905,14 +949,14 @@ with t_cert:
 
                         xl_sheets = pd.ExcelFile(io.BytesIO(carga_bytes))
                         dias_map_cert = {int(m.group(1)): s for s in xl_sheets.sheet_names if (m := re.search(r"(\d{1,2})[-/\.](\d{1,2})", s))}
-                        
+
                         registros_sheets = []
                         for d_num, s_name in dias_map_cert.items():
                             if dia_desde_cert <= d_num <= dia_hasta_cert:
                                 df_s_raw = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, header=None)
                                 h_idx = next((idx for idx, row in df_s_raw.iterrows() if any(k in " ".join([str(v).upper() for v in row.values if pd.notna(v)]) for k in ["LEGAJO", "OBRA", "APELLIDO"])), 0)
                                 df_s = pd.read_excel(io.BytesIO(carga_bytes), sheet_name=s_name, skiprows=h_idx)
-                                
+
                                 l_col = next((c for c in df_s.columns if "LEGAJO" in str(c).upper()), None)
                                 n_col = next((c for c in df_s.columns if any(k in str(c).upper() for k in ["APELLIDO", "NOMBRE"])), None)
                                 t_col = next((c for c in df_s.columns if "TRABAJO" in str(c).upper()), None)
@@ -921,10 +965,10 @@ with t_cert:
                                     for _, r in df_s.iterrows():
                                         l_val = limpiar_legajo(r[l_col])
                                         n_val = str(r[n_col]).strip() if n_col and pd.notna(r[n_col]) else ""
-                                        
-                                        if not filtrar_por_contrato(l_val, n_val, contrato_sel_cert): 
+
+                                        if not filtrar_por_contrato(l_val, n_val, contrato_sel_cert):
                                             continue
-                                            
+
                                         hs_hojas = extraer_horas(r[t_col])
                                         if hs_hojas > 0:
                                             registros_sheets.append({
@@ -1033,7 +1077,7 @@ with t_cert:
 
                             st.divider()
                             st.subheader(f"📋 Auditoría de Certificación y Carga ({contrato_sel_cert} - Días {dia_desde_cert:02d} al {dia_hasta_cert:02d})")
-                            
+
                             columnas_vista = ["Legajo", "Nombre", "Total Horas Sheets", "Horas Certificadas", "Horas No Certificadas", "⚠️ Pendiente de Carga / Fuera de Drive"]
                             st.dataframe(df_final_cruce[columnas_vista], use_container_width=True)
 
