@@ -360,13 +360,6 @@ def extraer_horas(val):
     if match: return float(match.group(1).replace(",", "."))
     return 0.0
 
-def calcular_horas_fichada(ing, sal):
-    i = convertir_a_horas_decimal(ing)
-    s = convertir_a_horas_decimal(sal)
-    if i is None or s is None:
-        return 0.0
-    return s - i if s >= i else (24.0 - i) + s
-
 SJG_LOGO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 130" width="100%" height="75" style="max-width: 380px;"><g fill="#0A0A0A"><text x="5" y="82" font-family="\'Montserrat\', \'Arial Black\', sans-serif" font-weight="900" font-size="78" letter-spacing="-1.5">SJG</text><text x="8" y="116" font-family="\'Montserrat\', \'Arial\', sans-serif" font-weight="800" font-size="17" letter-spacing="3.2">MONTAJES INDUSTRIALES</text><polygon points="230,126 260,126 282,98 230,126" /><polygon points="318,24 294,126 268,126 290,98 318,24" /><polygon points="352,70 302,126 392,126" /></g></svg>'
 
 col_logo, col_titulo, col_refrescar = st.columns([1.2, 2.3, 0.9])
@@ -722,7 +715,7 @@ with t_reporte:
             except Exception as e: st.error(f"Error al procesar: {e}")
     else: st.info("Seleccione una fecha de Google Sheets y un archivo de fichada en Drive para cruzar.")
 
-# --- PESTAÑA: 📋 CIERRE DE PERÍODO (GESTIÓN DE OTs CON DESCARGA Y ESTADO N) ---
+# --- PESTAÑA: 📋 CIERRE DE PERÍODO (GESTIÓN DE OTs CON CRUCE, ESTADOS Y DESCARGA) ---
 with t_cierre:
     st.header("📋 Notificación y Cierre de Período (Gestión de OTs)")
     if carga_bytes:
@@ -810,10 +803,31 @@ with t_cierre:
 
                 if not df_ots_unicas.empty:
                     df_ots_unicas["Días Presente"] = df_ots_unicas["Días Presente"].apply(lambda x: ", ".join(x))
-                    st.write("📝 **Completá o modificá los datos directamente en la tabla:**")
                     
-                    # Corrección aplicada aquí (st.data_editor directo)
-                    edited_ots_df = st.data_editor(df_ots_unicas, use_container_width=True, key="editor_ots_cierre")
+                    # --- APARTADO DE FILTRADO Y MÉTRICAS DE OTs ---
+                    st.divider()
+                    st.subheader("🔍 Filtrado y Auditoría de OTs (Aprobadas / Pendientes)")
+                    
+                    # Contadores métricos rápidos
+                    total_ots_cruzadas = len(df_ots_unicas)
+                    aprobadas_count = len(df_ots_unicas[df_ots_unicas["Estado Solicitud"].str.lower().str.contains("aprob", na=False)])
+                    pendientes_count = len(df_ots_unicas[df_ots_unicas["Estado Solicitud"].str.lower().str.contains("pend", na=False)])
+                    
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("📊 OTs Únicas Procesadas", total_ots_cruzadas)
+                    m2.metric("🟢 Aprobadas", aprobadas_count)
+                    m3.metric("🟡 Pendientes / Otras", pendientes_count)
+                    
+                    # Selector para filtrar la vista
+                    filtro_estado = st.selectbox("Filtrar vista de OTs por Estado:", ["Todas", "Aprobadas", "Pendientes"])
+                    df_vista_ots = df_ots_unicas.copy()
+                    if filtro_estado == "Aprobadas":
+                        df_vista_ots = df_vista_ots[df_vista_ots["Estado Solicitud"].str.lower().str.contains("aprob", na=False)]
+                    elif filtro_estado == "Pendientes":
+                        df_vista_ots = df_vista_ots[df_vista_ots["Estado Solicitud"].str.lower().str.contains("pend", na=False)]
+
+                    st.write(f"📝 **Completá o modificá los datos directamente en la tabla ({filtro_estado}):**")
+                    edited_ots_df = st.data_editor(df_vista_ots, use_container_width=True, key="editor_ots_cierre")
                     
                     # Buffer Excel para descarga
                     buffer_excel = io.BytesIO()
